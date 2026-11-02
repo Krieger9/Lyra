@@ -21,7 +21,7 @@ ollama list
 
 ### Configure PostgreSQL
 
-Create a database named `lyra` and set `DATABASE_URL` in `.env` to its PostgreSQL SQLAlchemy URL. The application user needs permission to create schemas and tables at initial setup. PromptStudio owns `prompt_studio.prompt_versions`, `prompt_groups`, and `prompt_group_members`. AgentStudio owns `agent_studio.traces`.
+Create a database named `lyra` and set `DATABASE_URL` in `.env` to its PostgreSQL SQLAlchemy URL. The application user needs permission to create schemas and tables at initial setup. PromptStudio owns `prompt_studio.prompt_versions`, `prompt_groups`, and `prompt_group_members`. AgentStudio owns `agent_studio.traces`. Lyra's configuration adapter stores reusable definitions in `agent_studio.agent_definitions`, with foreign keys to PromptStudio versions.
 
 For local development, the included Compose project provides this database on `127.0.0.1:55432`. On a fresh checkout, generate a password with `python -c "import secrets; print(secrets.token_urlsafe(36))"` and use it for both database settings shown in `.env.example`. Start the database manually with `docker compose up -d --wait postgres` before launching FastAPI. Stop it with `docker compose stop postgres`. It uses a named volume and has automatic restart disabled.
 
@@ -53,7 +53,17 @@ An Azure-hosted backend can use managed identity for its own calls to downstream
 
 ### Start the server
 
-After editing the TypeScript or CSS in `flow-editor/`, run `npm run build` and reload Flow View. Use Node 22.12+ for the frontend build. Each draft starts with one permanent **API Input** node representing the flow’s incoming request. Select **Add item** to add a generic item and edit its name in the inspector. Leaving the page clears the draft.
+After editing the TypeScript or CSS in `flow-editor/`, run `npm run build` and reload Flow View. Use Node 22.12+ for the frontend build. Each draft starts with one permanent **API Input** for the incoming request. Choose **Agent** or **Generic item** under **Item type**, then select **Add to canvas**. An Agent starts as an unconfigured placeholder with a validation error. Select it and choose a saved definition or follow **Create agent** in its properties panel. Assigning a definition supplies its name, instructions and prompt and clears the error. Each flow item has its own assignment. New items start disconnected. Drag from the right port of API Input or an Agent to another Agent’s left port. You can also select an Agent and use its inspector to connect or disconnect individual input sources.
+
+Use **Agents** in the left navigation to list, create and edit reusable definitions. Each definition has a name, system instructions and an input configuration. **Prompt** defaults to **Raw user input**, meaning incoming flow text is passed through directly. Select a versioned PromptStudio template to format that input instead. The API represents raw input as `prompt: null`.
+
+On startup Lyra seeds `Instructions.default` with `You are a helpful agent` if its first version is absent. This is a normal PromptStudio entry, and edits publish new versions. New agents default to its latest version. Agents retain their selected instruction and template versions until explicitly edited. Requests that omit instructions use the latest default, and requests that omit the prompt use raw input. The startup schema update allows existing definitions to use raw input while retaining their template references.
+
+The editor previews selected library text and links to **PromptStudio** to create new prompts or publish revisions. Saving a prompt opened from an agent field returns to that agent form with the new version selected in that field. Saving from the standalone PromptStudio list returns to the list. Creating or editing an agent from a flow item returns to that flow and assigns the saved definition to the originating item.
+
+Breadcrumbs show the context across admin pages. Use them or the Back and Forward controls to navigate. Unsaved forms and flow layouts, including wiring and canvas position, are restored from browser session storage in the current tab. Saved definitions and prompt versions persist in PostgreSQL.
+
+All definition and prompt APIs require `ENTRA_ADMIN_SCOPE` and `User.Admin`. Updates to an agent carry its revision and return HTTP 409 if another editor has saved a newer revision. Prompt edits publish new versions, and existing agents retain their selected versions until explicitly updated.
 
 The default model is `qwen2.5-14b-q5:latest`, available on the original development machine. On another machine, set `OLLAMA_MODEL` to an exact name from `ollama list`. For example, to use `llama3.2`, run `ollama pull llama3.2` and set `$env:OLLAMA_MODEL = "llama3.2"`. Lyra connects to `http://127.0.0.1:11434` by default. Set `OLLAMA_HOST` to use another Ollama server.
 

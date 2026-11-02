@@ -23,6 +23,14 @@
         <span class="nav-label">Workspace</span>
       </button>
       <nav id="workspace-nav" aria-label="Configuration">
+        <a href="/admin/agents/" title="Agents" aria-label="Agents">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="16" height="14" rx="4"/><path d="M12 3v4M8 12v2m8-2v2m-7 4h6"/></svg>
+          <span class="nav-label">Agents</span>
+        </a>
+        <a href="/admin/prompts/" title="PromptStudio" aria-label="PromptStudio">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM9 11h6m-6 4h6"/></svg>
+          <span class="nav-label">PromptStudio</span>
+        </a>
         <a href="/admin/providers/" title="Providers" aria-label="Providers">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4"/></svg>
           <span class="nav-label">Providers</span>
@@ -35,6 +43,13 @@
     </div>
   </aside>
   <main>
+    <div id="admin-navigation" hidden>
+      <div class="history-controls">
+        <button id="admin-back" type="button" aria-label="Go back" title="Go back">←</button>
+        <button id="admin-forward" type="button" aria-label="Go forward" title="Go forward">→</button>
+      </div>
+      <nav id="breadcrumbs" aria-label="Breadcrumb"></nav>
+    </div>
     <div class="eyebrow">ADMIN WORKSPACE</div>
     <h1>Configure Lyra</h1>
     <p id="status" role="status">Checking access…</p>
@@ -53,6 +68,8 @@
     <section id="flow-page" hidden aria-label="Flow editor">
       <div id="flow-editor"></div>
     </section>
+    <section id="agents-page" hidden aria-label="Agent definitions"></section>
+    <section id="prompts-page" hidden aria-label="Prompt library"></section>
     </div>
   </main>
   </div>

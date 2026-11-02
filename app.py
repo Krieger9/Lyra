@@ -16,6 +16,7 @@ from prompt_studio import NotFoundError, PromptLibrary, SQLAlchemyStorage
 from pydantic import BaseModel, Field, StringConstraints
 
 from auth import require_admin_access, require_chat_access, settings
+from agent_definitions import create_schema as create_agent_schema, router as definitions_router, seed_defaults
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -54,7 +55,9 @@ async def lifespan(app: FastAPI):
         storage.create_schema()
         traces = PostgresTraceAdapter(storage.engine)
         traces.create_schema()
+        create_agent_schema(storage.engine)
         library = PromptLibrary(storage, name="lyra")
+        seed_defaults(library)
         try:
             library.get(PROMPT)
         except NotFoundError:
@@ -75,6 +78,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lyra Chat", lifespan=lifespan)
+app.include_router(definitions_router)
 MSAL = ROOT / "node_modules/@azure/msal-browser/lib"
 
 
@@ -102,6 +106,8 @@ def admin_home(request: Request, response: Response):
 
 @app.get("/admin/providers/", include_in_schema=False)
 @app.get("/admin/flow/", include_in_schema=False)
+@app.get("/admin/agents/", include_in_schema=False)
+@app.get("/admin/prompts/", include_in_schema=False)
 def admin_page():
     return FileResponse(ROOT / "static/admin/index.html")
 

@@ -1,13 +1,29 @@
-.layout main:has(#flow-page:not([hidden])) { max-width: 1500px; padding-block: clamp(24px, 4vh, 48px); }
-#workspace:has(#flow-page:not([hidden])) { padding: 0; }
-.flow-toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+body:has(.flow-editor) { height: 100dvh; overflow: hidden; }
+body:has(.flow-editor) > header { flex-shrink: 0; }
+body:has(.flow-editor) .layout { min-height: 0; }
+.layout main:has(.flow-editor) { display: flex; flex-direction: column; max-width: none; margin: 0; padding: 0; }
+.layout main:has(.flow-editor) > :is(.eyebrow, h1) { display: none; }
+.layout main:has(.flow-editor) > #admin-navigation { margin: 0; padding: 6px 20px; flex-shrink: 0; border-bottom: 1px solid var(--line); }
+.layout main:has(.flow-editor) > #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#workspace:has(.flow-editor) { flex: 1; min-height: 0; padding: 0; border: 0; border-radius: 0; }
+#flow-page:not([hidden]), #flow-editor, .flow-editor { height: 100%; min-height: 0; }
+.flow-editor { display: flex; flex-direction: column; }
+.flow-toolbar { display: flex; flex-shrink: 0; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--line); }
 .flow-toolbar h2 { margin: 0; }
+.flow-toolbar, .flow-actions { flex-wrap: wrap; }
+.flow-actions { display: flex; align-items: center; gap: 8px; }
+.flow-actions select { max-width: 240px; }
+.catalog-status { width: 100%; margin: 0; font-size: 13px; }
+.flow-inspector a { display: inline-block; margin-bottom: 20px; }
+.flow-editor select { max-width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: white; color: inherit; font: inherit; }
+.flow-inspector select { display: block; width: 100%; margin-top: 4px; }
+.flow-input { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; margin-bottom: 12px; overflow-wrap: anywhere; }
 .flow-toolbar small, .flow-inspector p { color: #625e70; }
 .add-item { background: var(--ink); color: white; padding: 9px 14px; }
 .add-item:hover:enabled { background: #514286; }
-.flow-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 23%); }
-.flow-canvas { position: relative; height: clamp(340px, 55vh, 760px); min-width: 0; background: #faf9fc; border-radius: 0 0 0 16px; overflow: hidden; }
-.flow-inspector { padding: 20px; border-left: 1px solid var(--line); }
+.flow-grid { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 280px; }
+.flow-canvas { position: relative; height: 100%; min-height: 0; min-width: 0; background: #faf9fc; overflow: hidden; }
+.flow-inspector { min-width: 0; min-height: 0; overflow-y: auto; padding: 20px; border-left: 1px solid var(--line); }
 .flow-inspector h3 { margin: 0 0 12px; font-size: 16px; }
 .flow-inspector p, .flow-inspector label { font-size: 14px; line-height: 1.5; }
 .flow-inspector input { display: block; width: 100%; font: inherit; margin: 4px 0 24px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
@@ -19,8 +35,16 @@
 .api-input-icon svg { width: 22px; height: 22px; }
 .api-input-card .item-kind { color: #316754; }
 .react-flow__node.selected .api-input-card { border-color: #27755d; box-shadow: 0 0 0 2px #c3e2d6; }
+.agent-card { display: flex; align-items: center; gap: 10px; background: #f7f6fd; border-color: #ada1cd; }
+.agent-icon { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: #59428a; background: #e8e1f6; }
+.agent-icon svg { width: 23px; height: 23px; }
+.agent-validation { display: block; margin-top: 6px; color: #a12f25; font-size: 11px; }
+.agent-card.invalid-agent { border-color: #b95043; background: #fff7f4; }
+.react-flow__node.selected .invalid-agent { border-color: #a12f25; box-shadow: 0 0 0 2px #f2cdc5; }
+.flow-inspector .agent-error { color: #a12f25; }
+.flow-canvas .flow-port { width: 14px; height: 14px; border: 2px solid white; background: #66558a; }
+.api-input-card .flow-port { background: #27755d; }
 @media (max-width: 900px) {
-  .flow-grid { grid-template-columns: 1fr; }
-  .flow-inspector { border-left: 0; border-top: 1px solid var(--line); }
-  .flow-canvas { border-radius: 0; }
+  .flow-grid { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  .flow-inspector { max-height: 30dvh; border-left: 0; border-top: 1px solid var(--line); }
 }

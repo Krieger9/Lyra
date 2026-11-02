@@ -62,6 +62,20 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"prompt_library": "lyra", "chat_model": "test-model"})
 
+    async def test_definition_endpoints_require_admin_scope_and_role(self):
+        requests = [
+            ("GET", "/api/admin/catalog"),
+            ("POST", "/api/admin/agents"),
+            ("PUT", "/api/admin/agents/" + str(uuid4())),
+            ("POST", "/api/admin/prompts"),
+        ]
+        for method, path in requests:
+            response = await self.browser.request(method, path)
+            self.assertEqual(response.status_code, 401)
+            for scope, role in [("access-as-user", "User.Admin"), ("access-as-admin", "User.Chat")]:
+                response = await self.browser.request(method, path, headers=self.headers(scp=scope, roles=[role]))
+                self.assertEqual(response.status_code, 403)
+
     async def test_chat_navigation_uses_verified_roles(self):
         path = "/api/chat/session"
         self.assertEqual((await self.browser.get(path)).status_code, 401)

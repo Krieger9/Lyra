@@ -66,6 +66,27 @@ async function loadHome() {
   for (const field of document.querySelectorAll("[data-library]")) field.textContent = home.prompt_library;
   sidebar.hidden = false;
   document.querySelector("#workspace").hidden = false;
+  const { initializeNavigation } = await import("/admin/navigation.js");
+  initializeNavigation();
+  window.lyraAdminRequest = async (path, options = {}) => {
+    const { accessToken } = await auth.client.acquireTokenSilent({ scopes: auth.scopes, account });
+    const result = await fetch(path, {
+      ...options,
+      headers: { ...options.headers, Authorization: "Bearer " + accessToken },
+      cache: "no-store",
+    });
+    if (!result.ok) {
+      if (result.status === 401) throw new Error("Your session expired. Sign in again.");
+      if (result.status === 403) throw new Error("Administrator access is required.");
+      const body = await result.json().catch(() => ({}));
+      throw new Error(typeof body.detail === "string" ? body.detail : "Could not save or load configuration. Check your entries and try again.");
+    }
+    return result.json();
+  };
+  if (page === "agents" || page === "prompts") {
+    const { mountConfiguration } = await import("/admin/configuration.js");
+    await mountConfiguration(page);
+  }
   if (page === "flow") {
     const stylesheet = document.createElement("link");
     stylesheet.rel = "stylesheet";
@@ -76,7 +97,9 @@ async function loadHome() {
   const descriptions = {
     home: "Your Lyra workspace at a glance.",
     providers: "The provider serving chat requests.",
-    flow: "Every flow starts with API Input. Add items to build your draft.",
+    flow: "Drag from a right output port to an Agent’s left input port to connect them.",
+    agents: "Define reusable agents using instructions and prompts from PromptStudio.",
+    prompts: "Manage the versioned Lyra prompt library.",
   };
   statusLine.textContent = descriptions[page];
 }
