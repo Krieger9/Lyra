@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configure Lyra</title>
+  <link rel="stylesheet" href="/chat.css">
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/vendor/msal.js" defer></script>
+  <script src="/entra.js" defer></script>
+  <script src="/admin/admin.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="mark" aria-hidden="true">✦</span> Lyra <span class="divider"></span><small>Configuration</small></div>
+    <div class="actions"><a class="workspace-link" href="/">Back to chat</a><button type="button" id="account" disabled>Sign in</button></div>
+  </header>
+  <main>
+    <div class="eyebrow">ADMIN WORKSPACE</div>
+    <h1>Configure Lyra</h1>
+    <p id="status" role="status">Checking access…</p>
+    <section id="workspace" hidden aria-labelledby="overview">
+      <h2 id="overview">Current configuration</h2>
+      <dl>
+        <dt>Chat model</dt><dd id="model"></dd>
+        <dt>Prompt library</dt><dd id="library"></dd>
+      </dl>
+    </section>
+  </main>
+</body>
+</html>

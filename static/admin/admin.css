@@ -1,0 +1,8 @@
+body { height: auto; min-height: 100dvh; }
+main { display: block; padding-block: clamp(32px, 7vh, 80px); }
+#status { font-size: 15px; margin: 12px 0 24px; }
+#workspace { background: white; border: 1px solid var(--line); padding: clamp(18px, 4vw, 32px); border-radius: 16px; }
+h2 { font: normal 28px Georgia, serif; margin: 0 0 12px; }
+dl { margin: 0; }
+dt { font-size: 13px; color: #686675; margin-top: 18px; }
+dd { margin: 4px 0 0; overflow-wrap: anywhere; }

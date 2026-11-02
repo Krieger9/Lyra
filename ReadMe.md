@@ -44,9 +44,11 @@ MSAL Browser signs the user in with PKCE and requests `api://19a2bf26-c383-4fb6-
 | Operation | Delegated scope | Backend app role |
 | --- | --- | --- |
 | Chat | `access-as-user` | `User.Chat` or `User.Admin` |
-| Future PromptStudio, AgentStudio and configuration screens | `access-as-admin` | `User.Admin` |
+| [Configuration home](http://localhost:8765/admin/) | `access-as-admin` | `User.Admin` |
 
-The chat frontend requests only the chat scope. The admin policy is reserved for future configuration endpoints. An Azure-hosted backend can use managed identity for its own calls to downstream Azure resources. [Microsoft managed identity overview](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity)
+Choose **Configure Lyra** from chat to open the read-only admin home. It uses the existing SPA registration and callback, requests the backend scope named by `ENTRA_ADMIN_SCOPE`, and returns to `/admin/` after sign-in. The frontend registration needs delegated permission to that backend scope. The home displays the current model and prompt library after FastAPI checks the access token. `ENTRA_ADMIN_ROLES` defaults to `User.Admin`. Chat continues to request `ENTRA_CHAT_SCOPE`.
+
+An Azure-hosted backend can use managed identity for its own calls to downstream Azure resources. [Microsoft managed identity overview](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity)
 
 ### Start the server
 

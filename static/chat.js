@@ -16,21 +16,9 @@ const accountButton = document.querySelector("#account");
 const signInDraftKey = "lyra.signInDraft";
 
 async function initializeAuth() {
-  const response = await fetch("/auth/config", { cache: "no-store" });
-  const config = await response.json();
-  if (!response.ok) throw new Error(config.detail);
-  const origin = new URL(config.redirectUri).origin;
-  if (location.origin !== origin) {
-    location.replace(origin);
-    return;
-  }
-  scopes = [config.scope];
-  redirectUri = config.redirectUri;
-  client = new msal.PublicClientApplication({
-    auth: { clientId: config.clientId, authority: config.authority, redirectUri: config.redirectUri },
-    cache: { cacheLocation: "sessionStorage" },
-  });
-  await client.initialize();
+  const auth = await createLyraClient("chat");
+  if (!auth) return;
+  ({ client, scopes, redirectUri } = auth);
   const savedDraft = sessionStorage.getItem(signInDraftKey);
   if (savedDraft !== null) {
     draft.value = savedDraft;

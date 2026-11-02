@@ -8,14 +8,14 @@ from agent_studio import (
     AgentStudio, Endpoint, PostgresTraceAdapter, Model, ModelGroup,
     OllamaAgentAdapter, PromptStudioAdapter, Protocol,
 )
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from prompt_studio import NotFoundError, PromptLibrary, SQLAlchemyStorage
 from pydantic import BaseModel, Field, StringConstraints
 
-from auth import require_chat_access, settings
+from auth import require_admin_access, require_chat_access, settings
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -79,15 +79,25 @@ MSAL = ROOT / "node_modules/@azure/msal-browser/lib"
 
 
 @app.get("/auth/config", include_in_schema=False)
-def auth_config():
+def auth_config(site: Literal["chat", "admin"] = "chat"):
     config = settings()
+    if site == "admin":
+        config.check_admin_config()
+    scope = config.admin_scope if site == "admin" else config.scope
     return {"clientId": config.frontend, "authority": config.authority,
-            "redirectUri": config.redirect_uri, "scope": f"{config.resource}/{config.scope}"}
+            "redirectUri": config.redirect_uri, "scope": f"{config.resource}/{scope}"}
 
 
 @app.get("/auth/callback", include_in_schema=False)
 def spa_callback():
     return FileResponse(ROOT / "static/callback.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/admin/home", dependencies=[Depends(require_admin_access)])
+def admin_home(request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    studio = request.app.state.studio
+    return {"prompt_library": studio.prompts.library.name, "chat_model": studio.model.model.id}
 
 
 @app.get("/vendor/msal.js", include_in_schema=False)

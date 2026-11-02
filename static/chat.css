@@ -18,6 +18,7 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .divider { height: 18px; border-left: 1px solid var(--line); margin-left: 3px; }
 .brand small, footer { color: #686675; font: 13px "Segoe UI", sans-serif; }
 .actions { display: flex; gap: 8px; }
+.workspace-link { align-self: center; font-size: 13px; color: var(--ink); }
 .actions button { padding: 7px 12px; font-size: 13px; }
 main { width: min(100% - 36px, 760px); margin-inline: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #welcome { margin-block: auto; padding: 24px 0; }

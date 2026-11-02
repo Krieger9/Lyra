@@ -19,6 +19,7 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             "ENTRA_TENANT_ID": self.tenant, "ENTRA_FE_CLIENT_ID": self.frontend,
             "ENTRA_BE_CLIENT_ID": self.backend, "ENTRA_API_URI": self.resource,
             "ENTRA_CHAT_SCOPE": "access-as-user", "ENTRA_CHAT_ROLES": "User.Chat,User.Admin",
+            "ENTRA_ADMIN_SCOPE": "access-as-admin", "ENTRA_ADMIN_ROLES": "User.Admin",
             "ENTRA_REDIRECT_URI": "http://localhost:8765/auth/callback",
         })
         env.start()
@@ -41,9 +42,31 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
                        "aud": self.backend, "azp": self.frontend, "tid": self.tenant, "sub": "test-user",
                        "scp": "access-as-user", "roles": ["User.Chat"], "nbf": now - 10, "exp": now + 300}
 
-    async def chat(self, **changes):
+    def headers(self, **changes):
         token = jwt.encode(self.claims | changes, self.private_key, algorithm="RS256", headers={"kid": "test"})
-        return await self.browser.post("/api/chat", json={"message": "hi"}, headers={"Authorization": "Bearer " + token})
+        return {"Authorization": "Bearer " + token}
+
+    async def chat(self, **changes):
+        return await self.browser.post("/api/chat", json={"message": "hi"}, headers=self.headers(**changes))
+
+    async def test_admin_home_requires_admin_scope_and_role(self):
+        config = (await self.browser.get("/auth/config?site=admin")).json()
+        self.assertEqual(config["scope"], self.resource + "/access-as-admin")
+        self.assertEqual((await self.browser.get("/api/admin/home")).status_code, 401)
+        for scope, role in [("access-as-user", "User.Admin"), ("access-as-admin", "User.Chat")]:
+            response = await self.browser.get("/api/admin/home", headers=self.headers(scp=scope, roles=[role]))
+            self.assertEqual(response.status_code, 403)
+        self.studio.prompts.library.name = "lyra"
+        self.studio.model.model.id = "test-model"
+        response = await self.browser.get("/api/admin/home", headers=self.headers(scp="access-as-admin", roles=["User.Admin"]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"prompt_library": "lyra", "chat_model": "test-model"})
+
+    async def test_missing_admin_config_leaves_chat_available(self):
+        with patch.dict("os.environ", {"ENTRA_ADMIN_SCOPE": ""}):
+            settings.cache_clear()
+            self.assertEqual((await self.browser.get("/auth/config?site=admin")).status_code, 503)
+            self.assertEqual((await self.chat()).status_code, 200)
 
     async def test_configuration_and_chat(self):
         config = (await self.browser.get("/auth/config")).json()

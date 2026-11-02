@@ -36,6 +36,8 @@ class EntraAuth:
         self.resource = os.environ["ENTRA_API_URI"].strip().rstrip("/")
         self.scope = os.environ["ENTRA_CHAT_SCOPE"].strip()
         self.roles = {r.strip() for r in os.environ["ENTRA_CHAT_ROLES"].split(",") if r.strip()}
+        self.admin_scope = os.getenv("ENTRA_ADMIN_SCOPE", "").strip()
+        self.admin_roles = {r.strip() for r in os.getenv("ENTRA_ADMIN_ROLES", "User.Admin").split(",") if r.strip()}
         self.redirect_uri = os.environ["ENTRA_REDIRECT_URI"].strip()
         uri = urlsplit(self.redirect_uri)
         local = uri.scheme == "http" and uri.hostname in {"localhost", "127.0.0.1"}
@@ -51,7 +53,14 @@ class EntraAuth:
             "2.0": EntraKeys(f"{self.authority}/discovery/v2.0/keys", self.tenant),
         }
 
-    def authorize(self, token: str):
+    def check_admin_config(self):
+        if (not self.admin_roles or not self.admin_scope or self.admin_scope in {self.scope, ".default"}
+                or "/" in self.admin_scope or any(c.isspace() for c in self.admin_scope)):
+            raise HTTPException(503, "Configure a distinct ENTRA_ADMIN_SCOPE and permitted admin roles.")
+
+    def authorize(self, token: str, *, admin: bool = False):
+        if admin:
+            self.check_admin_config()
         try:
             # Only select between the two fixed tenant configurations before verification.
             version = jwt.decode(token, options={"verify_signature": False}).get("ver")
@@ -73,11 +82,13 @@ class EntraAuth:
         if claims.get("azp" if v2 else "appid") != self.frontend:
             raise HTTPException(403, "Access token was not issued to the Lyra frontend.")
         scopes = claims.get("scp")
-        if not isinstance(scopes, str) or self.scope not in scopes.split():
-            raise HTTPException(403, "The user access token lacks the required delegated chat scope.")
+        required_scope = self.admin_scope if admin else self.scope
+        if not isinstance(scopes, str) or required_scope not in scopes.split():
+            raise HTTPException(403, f"Access requires the {required_scope} delegated scope.")
         roles = claims.get("roles")
-        if not isinstance(roles, list) or not any(role in roles for role in self.roles):
-            raise HTTPException(403, "Your account needs a Lyra chat role.")
+        allowed_roles = self.admin_roles if admin else self.roles
+        if not isinstance(roles, list) or not any(role in roles for role in allowed_roles):
+            raise HTTPException(403, "Your account does not have an assigned role for this area.")
 
 
 @lru_cache(maxsize=1)
@@ -92,3 +103,9 @@ def require_chat_access(credentials: HTTPAuthorizationCredentials | None = Depen
     if credentials is None:
         raise HTTPException(401, "Sign in to use chat.", headers={"WWW-Authenticate": "Bearer"})
     settings().authorize(credentials.credentials)
+
+
+def require_admin_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+    if credentials is None:
+        raise HTTPException(401, "Sign in to configure Lyra.", headers={"WWW-Authenticate": "Bearer"})
+    settings().authorize(credentials.credentials, admin=True)
