@@ -1,6 +1,6 @@
 # Lyra
 
-Lyra is a local chat application. A single FastAPI process serves the browser UI and chat API. The frontend uses HTML, CSS and JavaScript and runs without a build step.
+Lyra is a local chat application. A single FastAPI process serves the browser UI and chat API. Vite bundles the React Flow editor for the admin Flow View. Chat and the rest of the admin workspace use plain HTML, CSS and JavaScript.
 
 ## Foundation
 
@@ -15,6 +15,7 @@ Keep the two infrastructure checkouts at the relative paths in `requirements.txt
 py -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 npm ci
+npm run build
 ollama list
 ```
 
@@ -46,11 +47,13 @@ MSAL Browser signs the user in with PKCE and requests `api://19a2bf26-c383-4fb6-
 | Chat | `access-as-user` | `User.Chat` or `User.Admin` |
 | [Configuration home](http://localhost:8765/admin/) | `access-as-admin` | `User.Admin` |
 
-Choose **Configure Lyra** from chat to open the read-only admin home. It uses the existing SPA registration and callback, requests the backend scope named by `ENTRA_ADMIN_SCOPE`, and returns to `/admin/` after sign-in. The frontend registration needs delegated permission to that backend scope. The home displays the current model and prompt library after FastAPI checks the access token. `ENTRA_ADMIN_ROLES` defaults to `User.Admin`. Chat continues to request `ENTRA_CHAT_SCOPE`.
+Choose **Configure Lyra** from chat to open the read-only admin home. It uses the existing SPA registration and callback, requests the backend scope named by `ENTRA_ADMIN_SCOPE`, and returns to the requested admin page after sign-in. The frontend registration needs delegated permission to that backend scope. After FastAPI checks access, the left navigation opens [Providers](http://localhost:8765/admin/providers/) and [Flow View](http://localhost:8765/admin/flow/). The panel collapses to an icon rail and slides over the page on smaller screens. Select the Lyra brand to return to the configuration home. `ENTRA_ADMIN_ROLES` defaults to `User.Admin`. Chat continues to request `ENTRA_CHAT_SCOPE`.
 
 An Azure-hosted backend can use managed identity for its own calls to downstream Azure resources. [Microsoft managed identity overview](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity)
 
 ### Start the server
+
+After editing the TypeScript or CSS in `flow-editor/`, run `npm run build` and reload Flow View. Use Node 22.12+ for the frontend build. Each draft starts with one permanent **API Input** node representing the flow’s incoming request. Select **Add item** to add a generic item and edit its name in the inspector. Leaving the page clears the draft.
 
 The default model is `qwen2.5-14b-q5:latest`, available on the original development machine. On another machine, set `OLLAMA_MODEL` to an exact name from `ollama list`. For example, to use `llama3.2`, run `ollama pull llama3.2` and set `$env:OLLAMA_MODEL = "llama3.2"`. Lyra connects to `http://127.0.0.1:11434` by default. Set `OLLAMA_HOST` to use another Ollama server.
 

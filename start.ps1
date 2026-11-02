@@ -24,6 +24,9 @@ try {
     if (!(Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules\@azure\msal-browser\lib\msal-browser.min.js'))) {
         throw 'Run npm ci in the Lyra project first.'
     }
+    if (!(Test-Path -LiteralPath (Join-Path $projectRoot 'static\admin\flow-assets\editor.js'))) {
+        throw 'Run npm run build in the Lyra project first to build Flow View.'
+    }
     # Use the same .env parser and environment precedence as FastAPI.
     $modelUrl = 'import os, sys; from dotenv import load_dotenv; load_dotenv(sys.argv[1]); print(os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"))' |
         & $python - (Join-Path $projectRoot '.env')

@@ -1,5 +1,6 @@
 .venv/
 node_modules/
+static/admin/flow-assets/
 __pycache__/
 .lyra/
 .env

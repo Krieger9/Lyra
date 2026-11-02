@@ -1,0 +1,26 @@
+.layout main:has(#flow-page:not([hidden])) { max-width: 1500px; padding-block: clamp(24px, 4vh, 48px); }
+#workspace:has(#flow-page:not([hidden])) { padding: 0; }
+.flow-toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.flow-toolbar h2 { margin: 0; }
+.flow-toolbar small, .flow-inspector p { color: #625e70; }
+.add-item { background: var(--ink); color: white; padding: 9px 14px; }
+.add-item:hover:enabled { background: #514286; }
+.flow-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 23%); }
+.flow-canvas { position: relative; height: clamp(340px, 55vh, 760px); min-width: 0; background: #faf9fc; border-radius: 0 0 0 16px; overflow: hidden; }
+.flow-inspector { padding: 20px; border-left: 1px solid var(--line); }
+.flow-inspector h3 { margin: 0 0 12px; font-size: 16px; }
+.flow-inspector p, .flow-inspector label { font-size: 14px; line-height: 1.5; }
+.flow-inspector input { display: block; width: 100%; font: inherit; margin: 4px 0 24px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.item-card { width: 168px; padding: 12px 16px; border: 1px solid #bcb6cd; border-radius: 9px; background: white; overflow-wrap: anywhere; }
+.item-kind { display: block; font-size: 11px; color: #686475; margin-bottom: 5px; }
+.react-flow__node.selected .item-card { border-color: var(--ink); box-shadow: 0 0 0 2px #d8d2ed; }
+.api-input-card { display: flex; align-items: center; gap: 10px; width: 176px; border-color: #8fbbaf; background: #f5fbf8; }
+.api-input-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: #dcefe7; color: #19624e; }
+.api-input-icon svg { width: 22px; height: 22px; }
+.api-input-card .item-kind { color: #316754; }
+.react-flow__node.selected .api-input-card { border-color: #27755d; box-shadow: 0 0 0 2px #c3e2d6; }
+@media (max-width: 900px) {
+  .flow-grid { grid-template-columns: 1fr; }
+  .flow-inspector { border-left: 0; border-top: 1px solid var(--line); }
+  .flow-canvas { border-radius: 0; }
+}

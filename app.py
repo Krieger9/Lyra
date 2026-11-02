@@ -100,6 +100,12 @@ def admin_home(request: Request, response: Response):
     return {"prompt_library": studio.prompts.library.name, "chat_model": studio.model.model.id}
 
 
+@app.get("/admin/providers/", include_in_schema=False)
+@app.get("/admin/flow/", include_in_schema=False)
+def admin_page():
+    return FileResponse(ROOT / "static/admin/index.html")
+
+
 @app.get("/api/chat/session")
 def chat_session(response: Response, roles: list[str] = Depends(require_chat_access)):
     response.headers["Cache-Control"] = "no-store"
