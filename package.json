@@ -1,0 +1,7 @@
+{
+  "name": "lyra-chat",
+  "private": true,
+  "dependencies": {
+    "@azure/msal-browser": "5.27.0"
+  }
+}

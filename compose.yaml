@@ -1,0 +1,20 @@
+name: lyra-studios
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: lyra
+      POSTGRES_USER: lyra
+      POSTGRES_PASSWORD: ${LYRA_POSTGRES_PASSWORD:?Set LYRA_POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lyra -d lyra"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  postgres_data:

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<title>Lyra sign-in</title>
+<p id="result">Completing Microsoft sign-in…</p>
+<script src="/vendor/redirect-bridge.js"></script>
+<script>
+  if (!location.hash && !location.search) {
+    location.replace("/");
+  } else {
+    msalRedirectBridge.broadcastResponseToMainFrame().catch(() => {
+      document.querySelector("#result").textContent = "Sign-in could not finish. Return to Lyra and try again.";
+    });
+  }
+</script>
+</html>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f8f5">
+  <title>Lyra · Chat</title>
+  <link rel="stylesheet" href="/chat.css">
+  <script src="/vendor/msal.js" defer></script>
+  <script src="/chat.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="mark" aria-hidden="true">✦</span> Lyra <span class="divider"></span><small>Chat</small></div>
+    <div class="actions">
+      <button id="reset" type="button" disabled><span aria-hidden="true">＋</span> New chat</button>
+      <button id="account" type="button" disabled>Sign in</button>
+    </div>
+  </header>
+  <main>
+    <section id="welcome">
+      <div class="eyebrow"><span aria-hidden="true">✦</span> LYRA ASSISTANT</div>
+      <h1>What’s on your mind?</h1>
+      <p>Start with a question, a rough idea, or something you’d like to work through.</p>
+      <div class="suggestions">
+        <button type="button" data-prompt="Explain how a language model works in simple terms.">Explain a concept <span>↗</span></button>
+        <button type="button" data-prompt="Help me brainstorm ideas for a weekend project.">Explore an idea <span>↗</span></button>
+        <button type="button" data-prompt="Help me break a project into manageable steps.">Make a plan <span>↗</span></button>
+      </div>
+    </section>
+    <section id="messages" role="log" aria-label="Conversation"></section>
+    <div class="dock">
+      <div id="status" role="status"></div>
+      <form id="composer">
+        <label for="draft" class="sr-only">Message Lyra</label>
+        <textarea id="draft" placeholder="Message Lyra…" rows="2" maxlength="8000"></textarea>
+        <button id="send" type="submit" aria-label="Send message" disabled>↑</button>
+      </form>
+      <footer>Enter to send <span>·</span> Shift + Enter for a new line</footer>
+    </div>
+  </main>
+</body>
+</html>
