@@ -63,7 +63,7 @@ With PostgreSQL already running, use the Windows PowerShell scripts from the Lyr
 
 `start.ps1` starts FastAPI in the background and waits for the chat UI. It reuses a running local Ollama server, or starts one if the configured loopback endpoint is offline. A remote `OLLAMA_HOST` is managed separately. `stop.ps1` stops only processes these scripts started. Both commands can be run repeatedly. Logs are in `.lyra/run/`. Manage PostgreSQL separately using the commands above.
 
-Open [Lyra Chat](http://localhost:8765/) and sign in. Enter sends a message and Shift + Enter adds a line. **New chat** or a page refresh clears the tab’s conversation.
+Open [Lyra Chat](http://localhost:8765/). Signed-out visitors go directly to Microsoft sign-in. After FastAPI verifies the chat access token, users with an admin role see **Configure Lyra**. Enter sends a message and Shift + Enter adds a line. **New chat** or a page refresh clears the tab’s conversation.
 
 ## Chat API
 

@@ -14,6 +14,12 @@ let account;
 let needsSignIn = true;
 const accountButton = document.querySelector("#account");
 const signInDraftKey = "lyra.signInDraft";
+const configureLink = document.querySelector("#configure");
+
+function lockChat() {
+  document.body.classList.add("chat-locked");
+  configureLink.hidden = true;
+}
 
 async function initializeAuth() {
   const auth = await createLyraClient("chat");
@@ -37,8 +43,36 @@ async function initializeAuth() {
   needsSignIn = !account;
   accountButton.disabled = false;
   accountButton.textContent = account ? "Sign out" : "Sign in";
-  statusLine.textContent = needsSignIn ? "Sign in with Microsoft to send a message." :
-    savedDraft ? "Signed in. Your draft is ready to send." : "";
+  if (account) {
+    try {
+      const token = await client.acquireTokenSilent({ scopes, account });
+      const response = await fetch("/api/chat/session", {
+        headers: { Authorization: "Bearer " + token.accessToken }, cache: "no-store",
+      });
+      if (response.ok) {
+        const session = await response.json();
+        configureLink.hidden = session.can_configure !== true;
+        document.body.classList.remove("chat-locked");
+        statusLine.textContent = savedDraft ? "Signed in. Your draft is ready to send." : "";
+        updateControls();
+        return;
+      }
+      if (response.status !== 401) {
+        throw new Error(response.status === 403 ? "Your account does not have access to Lyra chat." :
+          "Could not verify chat access. Refresh to try again.");
+      }
+    } catch (error) {
+      if (!(error instanceof msal.InteractionRequiredAuthError)) throw error;
+    }
+  }
+  needsSignIn = true;
+  accountButton.textContent = "Sign in";
+  // A failed or interrupted redirect should offer a retry instead of looping.
+  if (savedDraft === null && !result) {
+    await changeSignIn();
+    return;
+  }
+  statusLine.textContent = "Sign-in did not complete. Select Sign in to try again.";
   updateControls();
 }
 
@@ -52,11 +86,12 @@ async function changeSignIn() {
       statusLine.textContent = "Opening Microsoft sign-in…";
       await client.acquireTokenRedirect({ scopes, account, redirectStartPage: location.origin + "/" });
     } else {
+      lockChat();
       await client.logoutRedirect({ account, postLogoutRedirectUri: redirectUri });
     }
   } catch {
     sessionStorage.removeItem(signInDraftKey);
-    statusLine.textContent = "Microsoft sign-in is unavailable. Please try again.";
+    statusLine.textContent = "Microsoft authentication is unavailable. Refresh to try again.";
     accountButton.disabled = false;
     updateControls();
   }
@@ -68,10 +103,7 @@ initializeAuth().catch((error) => {
 });
 
 function updateControls() {
-  send.disabled = busy || accountButton.disabled || !draft.value.trim();
-  const label = needsSignIn ? "Sign in to send" : "Send message";
-  send.textContent = needsSignIn ? label : "↑";
-  send.setAttribute("aria-label", label);
+  send.disabled = busy || needsSignIn || accountButton.disabled || !draft.value.trim();
   reset.disabled = busy || (!history.length && !draft.value);
   draft.readOnly = busy;
 }
@@ -138,6 +170,7 @@ form.addEventListener("submit", async (event) => {
     });
     const data = await response.json();
     if (response.status === 401) needsSignIn = true;
+    if (response.status === 403) configureLink.hidden = true;
     if (!response.ok) {
       throw new Error(typeof data.detail === "string" ? data.detail : "Lyra couldn’t process that message.");
     }
@@ -152,8 +185,9 @@ form.addEventListener("submit", async (event) => {
     statusLine.textContent = error instanceof TypeError ? "Couldn’t reach Lyra. Please try again." : error.message;
     if (error instanceof msal.InteractionRequiredAuthError || needsSignIn) {
       needsSignIn = true;
-      accountButton.textContent = "Sign in again";
-      statusLine.textContent = "Sign in again to continue chatting.";
+      lockChat();
+      accountButton.textContent = "Sign in";
+      await changeSignIn();
     }
   } finally {
     busy = false;

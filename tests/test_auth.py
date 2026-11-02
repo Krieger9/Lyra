@@ -62,6 +62,14 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"prompt_library": "lyra", "chat_model": "test-model"})
 
+    async def test_chat_navigation_uses_verified_roles(self):
+        path = "/api/chat/session"
+        self.assertEqual((await self.browser.get(path)).status_code, 401)
+        for role, visible in [("User.Chat", False), ("User.Admin", True)]:
+            response = await self.browser.get(path, headers=self.headers(roles=[role]))
+            self.assertEqual(response.json(), {"can_configure": visible})
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     async def test_missing_admin_config_leaves_chat_available(self):
         with patch.dict("os.environ", {"ENTRA_ADMIN_SCOPE": ""}):
             settings.cache_clear()

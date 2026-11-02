@@ -89,6 +89,7 @@ class EntraAuth:
         allowed_roles = self.admin_roles if admin else self.roles
         if not isinstance(roles, list) or not any(role in roles for role in allowed_roles):
             raise HTTPException(403, "Your account does not have an assigned role for this area.")
+        return roles
 
 
 @lru_cache(maxsize=1)
@@ -102,7 +103,7 @@ def settings() -> EntraAuth:
 def require_chat_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
     if credentials is None:
         raise HTTPException(401, "Sign in to use chat.", headers={"WWW-Authenticate": "Bearer"})
-    settings().authorize(credentials.credentials)
+    return settings().authorize(credentials.credentials)
 
 
 def require_admin_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):

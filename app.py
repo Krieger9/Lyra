@@ -100,6 +100,12 @@ def admin_home(request: Request, response: Response):
     return {"prompt_library": studio.prompts.library.name, "chat_model": studio.model.model.id}
 
 
+@app.get("/api/chat/session")
+def chat_session(response: Response, roles: list[str] = Depends(require_chat_access)):
+    response.headers["Cache-Control"] = "no-store"
+    return {"can_configure": any(role in roles for role in settings().admin_roles)}
+
+
 @app.get("/vendor/msal.js", include_in_schema=False)
 def msal_browser():
     return FileResponse(MSAL / "msal-browser.min.js", media_type="application/javascript")
