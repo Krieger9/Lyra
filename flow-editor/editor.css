@@ -104,6 +104,15 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .trace-started { background: #fff1ca; }
 .trace-completed { background: #e4f4ed; }
 .trace-failed { background: #ffe3df; }
+.run-workspace .trace-focus { outline: 3px solid #59428a; outline-offset: 2px; }
+.run-workspace .trace-neighbor { outline: 1px dashed #8a79aa; outline-offset: 2px; }
+.run-workspace .trace-muted { opacity: .64; }
+.run-workspace .trace-wire-active .react-flow__edge-path { stroke: #59428a; stroke-width: 3; }
+.run-workspace .trace-wire-active .react-flow__edge-text { fill: #443168; font-weight: 600; }
+.run-workspace .trace-wire-muted { opacity: .4; }
+.run-inspector .trace-step { border-left: 3px solid transparent; padding-left: 8px; }
+.run-inspector .trace-step summary { cursor: pointer; padding-block: 3px; }
+.run-inspector .trace-step[open] { border-left-color: #59428a; background: #f6f3fa; }
 @media (max-width: 760px) {
   .run-layout { grid-template-columns: 1fr; grid-template-rows: minmax(110px, 35%) minmax(0, 1fr); }
 }

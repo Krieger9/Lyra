@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Background, Controls, Position, ReactFlow, ReactFlowProvider, type Edge, type Node } from "@xyflow/react";
 
 type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string } }[];
@@ -29,6 +29,15 @@ function eventLabel(event: Entry) {
   }
 }
 
+// A wire ID identifies a connection even if the design has since been renamed.
+function eventWires(event?: Entry): Set<unknown> | undefined {
+  if (!event) return;
+  if (event.kind === "mapping.applied") return new Set([event.data.wire]);
+  if (event.kind === "mapping.failed") return new Set([(event.data.rule as { edgeId?: string } | null)?.edgeId]);
+  if (event.kind === "node.started" && Array.isArray(event.data.inputs))
+    return new Set(event.data.inputs.map(input => input?.wire));
+}
+
 function download(run: RecordPage) {
   const url = URL.createObjectURL(new Blob([pretty(run)], { type: "application/json" }));
   const link = document.createElement("a");
@@ -44,6 +53,9 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
   const [runId, setRunId] = useState(new URLSearchParams(location.search).get("run") ?? "");
   const [run, setRun] = useState<RecordPage>();
   const [nodeId, setNodeId] = useState("");
+  const [eventSeq, setEventSeq] = useState<number | null>(null);
+  const timeline = useRef<HTMLHeadingElement>(null);
+  const measurements = useRef(new Map<string, Node["measured"]>());
   const [binding, setBinding] = useState<Binding | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,7 +98,7 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     if (id) url.searchParams.set("run", id);
     else url.searchParams.delete("run");
     window.history.replaceState(window.history.state, "", url);
-    if (id !== runId) { setRun(undefined); setNodeId(""); setRunId(id); }
+    if (id !== runId) { setRun(undefined); setNodeId(""); setEventSeq(null); setRunId(id); }
     setError("");
   }
   async function start() {
@@ -117,11 +129,33 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
   for (const e of entries) {
     if (e.node && e.kind.startsWith("node.")) states.set(e.node, e.kind.slice(5));
   }
+  const activeEvent = entries.find(e => e.seq === eventSeq);
+  const focusId = activeEvent?.node ?? nodeId;
+  const wires = eventWires(activeEvent);
+  const neighbors = new Set<string>();
+  const edges = doc.graph.edges.map(edge => {
+    const incident = edge.source === focusId || edge.target === focusId;
+    const highlighted = incident && (!wires || wires.has(edge.id));
+    if (highlighted) neighbors.add(edge.source === focusId ? edge.target : edge.source);
+    return { ...edge, label: edge.name, animated: states.get(edge.target) === "started",
+      className: focusId ? (highlighted ? "trace-wire-active" : "trace-wire-muted") : undefined };
+  });
+  function selectNode(id: string) {
+    setNodeId(id);
+    setEventSeq(null);
+    if (id) requestAnimationFrame(() => timeline.current?.scrollIntoView({ block: "nearest" }));
+  }
   const nodes: Node[] = doc.graph.nodes.map(node => {
     const state = states.get(node.id) ?? (run && run.status !== "running" ? "skipped" : "pending");
-    return {id:node.id, position:node.position, sourcePosition:Position.Right, targetPosition:Position.Left,
+    return {id:node.id, position:node.position, measured:measurements.current.get(node.id),
+      sourcePosition:Position.Right, targetPosition:Position.Left,
       data:{label:<><strong>{node.data.label || node.type}</strong><small>{state}</small></>},
-      className:"trace-node trace-" + state, selected:node.id === nodeId};
+      className:[`trace-node trace-${state}`, node.id === focusId ? "trace-focus" :
+        neighbors.has(node.id) ? "trace-neighbor" : focusId ? "trace-muted" : ""].join(" "),
+      selected:node.id === focusId, ariaRole:"button", ariaLabel:node.data.label || node.type,
+      domAttributes:{ "aria-pressed":node.id === focusId, onKeyDown:(event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectNode(node.id); }
+      }}};
   });
   const selected = doc.graph.nodes.find(node => node.id === nodeId);
   const visible = entries.filter(e => !nodeId || e.node === nodeId);
@@ -140,9 +174,15 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     </header>
     <div className="run-layout">
       <div className="flow-canvas" aria-label="Run diagram"><ReactFlowProvider><ReactFlow key={doc.id+":"+doc.revision}
-        nodes={nodes} edges={doc.graph.edges.map(e => ({...e,label:e.name,animated:states.get(e.target)==="started"}))}
+        nodes={nodes} edges={edges}
+        onNodesChange={changes => {
+          // Retain measured handles as selection and live events rebuild the read-only nodes.
+          for (const change of changes) {
+            if (change.type === "dimensions" && change.dimensions) measurements.current.set(change.id, change.dimensions);
+          }
+        }}
         nodesConnectable={false} nodesDraggable={false} deleteKeyCode={null} fitView minZoom={0.1}
-        onNodeClick={(_, n) => setNodeId(n.id)} onPaneClick={() => setNodeId("")}>
+        onNodeClick={(_, n) => selectNode(n.id)} onPaneClick={() => selectNode("")}>
         <Background/><Controls showInteractive={false}/></ReactFlow></ReactFlowProvider></div>
       <aside className="flow-inspector run-inspector">
         <h3>Run saved flow</h3><label>Raw input<textarea rows={3} maxLength={8000} value={input} onChange={e=>setInput(e.target.value)}/></label>
@@ -154,15 +194,22 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
           <small>{run.id}</small>{run.error && <p role="alert">{run.error}</p>}
           {run.status==="completed" && <pre>{pretty(run.result)}</pre>}
           <button disabled={run.status==="running" || run.hasMore} onClick={()=>download(run)}>Export run JSON</button>
-          <h3>{selected?.data.label || "Execution timeline"}</h3>
-          {selected && <button onClick={()=>setNodeId("")}>Show all steps</button>}
+          <h3 ref={timeline}>{selected?.data.label || "Execution timeline"}</h3>
+          {selected && <button onClick={()=>selectNode("")}>Show all steps</button>}
           {calls.length > 0 && <p>{calls.length} model {calls.length === 1 ? "call" : "calls"} · {calls.reduce((sum,e)=>sum+Number(e.data.duration_ms),0)} ms
             {tokenCounts.every(n=>typeof n === "number") && ` · ${tokenCounts.reduce<number>((sum,n)=>sum+(n ?? 0),0)} tokens`}</p>}
           {selected && first && <details><summary>Incoming wire values</summary><pre>{pretty(first.data.inputs)}</pre></details>}
           {selected && last && <details><summary>Node output · {String(last.data.duration_ms)} ms</summary><pre>{pretty(last.data.output)}</pre></details>}
           {selected && !visible.length && <p>This node has no recorded events.</p>}
-          {visible.map(e => <details key={e.seq}><summary>#{e.seq} · {eventLabel(e)} · +{e.elapsed_ms} ms</summary>
-            <small>{e.at} · {doc.graph.nodes.find(n=>n.id===e.node)?.data.label ?? "Flow"}</small><pre>{pretty(e.data)}</pre></details>)}
+          {visible.map(e => <details key={e.seq} open={e.seq === eventSeq} className="trace-step">
+            <summary onClick={click => {
+              click.preventDefault();
+              setEventSeq(current => current === e.seq ? null : e.seq);
+            }}>
+              <strong>{doc.graph.nodes.find(n => n.id === e.node)?.data.label || e.node || "Flow"}</strong>
+              {" · "}#{e.seq} · {eventLabel(e)} · +{e.elapsed_ms} ms
+            </summary>
+            <small>{e.at}</small><pre>{pretty(e.data)}</pre></details>)}
         </>}
       </aside>
     </div></div>;
