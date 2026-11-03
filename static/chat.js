@@ -15,6 +15,7 @@ let needsSignIn = true;
 const accountButton = document.querySelector("#account");
 const signInDraftKey = "lyra.signInDraft";
 const configureLink = document.querySelector("#configure");
+const markdown = window.markdownit?.({ html: false, breaks: true }).disable("image");
 
 function lockChat() {
   document.body.classList.add("chat-locked");
@@ -113,8 +114,18 @@ function appendTurn(role, content) {
   entry.className = role;
   const name = document.createElement("strong");
   name.textContent = role === "user" ? "You" : "Lyra";
-  const text = document.createElement("p");
-  text.textContent = content;
+  let text;
+  if (typeof content !== "string") {
+    text = document.createElement("pre");
+    text.textContent = JSON.stringify(content, null, 2);
+  } else if (role === "assistant" && markdown) {
+    text = document.createElement("div");
+    text.className = "markdown";
+    text.innerHTML = markdown.render(content);
+  } else {
+    text = document.createElement("p");
+    text.textContent = content;
+  }
   entry.append(name, text);
   messages.append(entry);
   entry.scrollIntoView({ block: "nearest" });
@@ -183,7 +194,7 @@ form.addEventListener("submit", async (event) => {
       throw new Error(typeof data.detail === "string" ? data.detail : "Lyra couldn’t process that message.");
     }
     const reply = typeof data.reply === "string" ? data.reply : JSON.stringify(data.reply, null, 2);
-    const entry = appendTurn("assistant", reply);
+    const entry = appendTurn("assistant", data.reply);
     if (inspectLink) entry.append(inspectLink);
     history.push({ role: "user", content: message });
     if (reply.trim()) history.push({ role: "assistant", content: reply.slice(0, 8000) });

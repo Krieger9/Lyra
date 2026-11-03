@@ -20,11 +20,11 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .actions { display: flex; gap: 8px; }
 .workspace-link { align-self: center; font-size: 13px; color: var(--ink); }
 .actions button { padding: 7px 12px; font-size: 13px; }
-main { width: min(100% - 36px, 760px); margin-inline: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+main { width: min(100% - 36px, max(760px, 75%)); margin-inline: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #welcome { margin-block: auto; padding: 24px 0; }
 .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .15em; color: var(--ink); }
 .eyebrow span { margin-right: 7px; }
-h1 { font: normal clamp(38px, 6vw, 64px)/1.06 Georgia, serif; letter-spacing: -.05em; margin: 18px 0 12px; }
+#welcome h1, main > h1 { font: normal clamp(38px, 6vw, 64px)/1.06 Georgia, serif; letter-spacing: -.05em; margin: 18px 0 12px; }
 #welcome p { color: #666471; font-size: 16px; line-height: 1.5; margin: 0; }
 .suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
 .suggestions button { padding: 9px 12px; font-size: 13px; }
@@ -32,8 +32,19 @@ h1 { font: normal clamp(38px, 6vw, 64px)/1.06 Georgia, serif; letter-spacing: -.
 #messages { flex: 1; overflow-y: auto; padding: 18px 4px; scrollbar-width: thin; }
 #messages:empty { display: none; }
 article { max-width: 90%; margin: 12px 0 24px; width: fit-content; }
-article strong { font-size: 12px; color: var(--ink); }
-article p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0 0; line-height: 1.6; }
+article > strong { font-size: 12px; color: var(--ink); }
+article > p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0 0; line-height: 1.6; }
+.markdown { overflow-x: auto; overflow-wrap: anywhere; line-height: 1.6; }
+.markdown > * { margin-block: .65em; }
+.markdown > :first-child { margin-top: 5px; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown blockquote { margin-inline: 0; border-left: 3px solid var(--line); padding-left: 1em; }
+.markdown code, article pre { background: #efedf4; border-radius: 4px; }
+.markdown code { padding: .1em .25em; }
+article pre { padding: .8em 1em; overflow-x: auto; }
+.markdown pre code { padding: 0; }
+.markdown table { border-collapse: collapse; }
+.markdown :is(th, td) { border: 1px solid var(--line); padding: .3em .65em; }
 .user { margin-left: auto; border-radius: 16px 16px 3px 16px; padding: 10px 16px; background: #ece9f4; }
 .dock { padding: 6px 0 max(12px, env(safe-area-inset-bottom)); }
 #status { font-size: 13px; color: var(--ink); margin-bottom: 8px; }

@@ -7,6 +7,7 @@
   "dependencies": {
     "@azure/msal-browser": "5.27.0",
     "@xyflow/react": "12.12.1",
+    "markdown-it": "15.0.3",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

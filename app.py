@@ -152,6 +152,12 @@ def msal_browser():
     return FileResponse(MSAL / "msal-browser.min.js", media_type="application/javascript")
 
 
+@app.get("/vendor/markdown-it.js", include_in_schema=False)
+def markdown_browser():
+    return FileResponse(ROOT / "node_modules/markdown-it/dist/browser/markdown-it.umd.min.js",
+                        media_type="application/javascript")
+
+
 @app.get("/vendor/redirect-bridge.js", include_in_schema=False)
 def msal_bridge():
     return FileResponse(MSAL / "redirect-bridge/msal-redirect-bridge.min.js", media_type="application/javascript")
