@@ -39,6 +39,9 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .flow-canvas { position: relative; height: 100%; min-height: 0; min-width: 0; background: #faf9fc; overflow: hidden; }
 .flow-inspector { min-width: 0; min-height: 0; overflow-y: auto; padding: 20px; border-left: 1px solid var(--line); }
 .flow-inspector h3 { margin: 0 0 12px; font-size: 16px; }
+.inspector-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.inspector-heading h3 { margin: 0; }
+.delete-element { color: #942f28; border-color: #dbb9b5; padding: 5px 9px; }
 .flow-inspector code { display: block; overflow-wrap: anywhere; margin-bottom: 20px; font-size: 12px; }
 .flow-inspector p, .flow-inspector label { font-size: 14px; line-height: 1.5; }
 .flow-inspector input { display: block; width: 100%; font: inherit; margin: 4px 0 24px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
@@ -59,6 +62,11 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .json-card { display: flex; align-items: center; gap: 10px; background: #fffaf0; border-color: #cbb06e; }
 .json-icon { flex: none; font: bold 22px Consolas, monospace; color: #87621d; }
 .flow-input .connection-id { flex-basis: 100%; margin: 0; font-size: 11px; }
+.wire-settings { width: 100%; margin-bottom: 10px; }
+.wire-settings form { display: flex; align-items: end; gap: 6px; flex-wrap: wrap; }
+.wire-settings form label { flex: 1; min-width: 100px; }
+.wire-settings form input { margin-bottom: 0; }
+.wire-settings small { display: block; margin-top: 6px; }
 .json-mapper { margin-bottom: 20px; }
 .json-mapper textarea { width: 100%; display: block; margin: 4px 0 8px; padding: 8px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; font: 13px/1.4 Consolas, monospace; }
 .json-mapper fieldset { min-width: 0; margin: 10px 0; border: 1px solid var(--line); border-radius: 6px; }
@@ -80,4 +88,22 @@ body:has(.flow-editor) .layout { min-height: 0; }
   .panel-divider { cursor: row-resize; }
   .panel-divider::after { width: 36px; height: 3px; }
   .flow-inspector { border-left: 0; border-top: 1px solid var(--line); }
+}
+.flow-editor { position: relative; }
+.run-workspace { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: white; }
+.flow-editor:has(.run-workspace) > :is(.flow-toolbar,.flow-grid) { visibility: hidden; }
+.run-toolbar { display: flex; align-items: center; flex-wrap: wrap; padding: 12px 18px; gap: 8px 14px; border-bottom: 1px solid var(--line); }
+.run-toolbar h2 { margin: 0; }
+.run-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 36%); }
+.run-inspector { overflow-wrap: anywhere; }
+.run-inspector h3:not(:first-child), .run-inspector details { margin-top: 14px; }
+.run-inspector label, .run-inspector textarea { display: block; width: 100%; }
+.run-inspector textarea { margin: 6px 0 10px; }
+.run-inspector pre { max-height: 40vh; overflow: auto; white-space: pre-wrap; }
+.trace-node small { display: block; margin-top: 3px; }
+.trace-started { background: #fff1ca; }
+.trace-completed { background: #e4f4ed; }
+.trace-failed { background: #ffe3df; }
+@media (max-width: 760px) {
+  .run-layout { grid-template-columns: 1fr; grid-template-rows: minmax(110px, 35%) minmax(0, 1fr); }
 }

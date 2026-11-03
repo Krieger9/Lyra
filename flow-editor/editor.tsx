@@ -8,6 +8,9 @@ import "@xyflow/react/dist/style.css";
 import "./editor.css";
 import { loadCatalog, type AgentDefinition, type Catalog, type PromptReference } from "./catalog";
 import { JsonMappingInspector, type JsonNodeData } from "./json-mapping";
+import { AgentOutput } from "./agent-output";
+import { RunView } from "./run-view";
+import { nameExistingWires, nextWireName, WireSettings, type Wire } from "./wires";
 import { draftSession, linkWithReturn, renderBreadcrumbs } from "../static/admin/navigation.js";
 
 type GenericItem = Node<{ label: string }, "item">;
@@ -17,12 +20,12 @@ type ApiResponse = Node<{ label: string }, "apiResponse">;
 type Agent = Node<{ label: string; definition: AgentDefinition | null }, "agent">;
 type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent;
 type PanelSize = { width: number; height: number };
-type FlowDraft = { items: FlowItem[]; edges: Edge[]; tool: string; nextNumber: number; viewport: Viewport; panelSize: PanelSize;
+type FlowDraft = { items: FlowItem[]; edges: Wire[]; tool: string; nextNumber: number; viewport: Viewport; panelSize: PanelSize;
   flowId?: string; revision?: number; name?: string; lastSaved?: string };
 type FlowSummary = { id: string; name: string; revision: number };
-type SavedFlow = FlowSummary & { graph: { nodes: FlowItem[]; edges: Edge[]; viewport: Viewport; panelSize: PanelSize } };
+type SavedFlow = FlowSummary & { graph: { nodes: FlowItem[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize } };
 
-function graphDocument(items: FlowItem[], edges: Edge[], viewport: Viewport, panelSize: PanelSize) {
+function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewport, panelSize: PanelSize) {
   return {
     nodes: items.map(node => ({
       id: node.id, type: node.type, position: node.position,
@@ -30,7 +33,7 @@ function graphDocument(items: FlowItem[], edges: Edge[], viewport: Viewport, pan
         ? { id: node.data.definition.id } : null,
         ...(node.type === "json" ? { objectDefinition: node.data.objectDefinition ?? null } : {}) },
     })),
-    edges: edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target })),
+    edges: edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, name: edge.name, readAs: edge.readAs ?? "value" })),
     viewport, panelSize,
   };
 }
@@ -133,8 +136,8 @@ function withEndpoints(nodes: FlowItem[] = []) {
 function Editor() {
   const [draft] = useState(() => draftSession<FlowDraft>());
   const [items, setItems, onNodesChange] = useNodesState<FlowItem>(withEndpoints(draft.data?.items));
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(draft.data?.edges ?? []);
-  const { updateNodeData, fitView, getViewport, setViewport: setCanvasViewport } = useReactFlow<FlowItem>();
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Wire>(nameExistingWires(draft.data?.edges ?? []));
+  const { updateNodeData, deleteElements, fitView, getViewport, setViewport: setCanvasViewport } = useReactFlow<FlowItem>();
   const requestedFlow = new URLSearchParams(location.search).get("id") ?? undefined;
   const [flowId, setFlowId] = useState(draft.data?.flowId);
   const [revision, setRevision] = useState(draft.data?.revision);
@@ -143,6 +146,7 @@ function Editor() {
   const [savedFlows, setSavedFlows] = useState<FlowSummary[]>([]);
   const [openFlowId, setOpenFlowId] = useState("");
   const [flowStatus, setFlowStatus] = useState("");
+  const [runDesign, setRunDesign] = useState<SavedFlow>();
   const [savingFlow, setSavingFlow] = useState(false);
   const [loadingFlow, setLoadingFlow] = useState(Boolean(requestedFlow &&
     (draft.data?.flowId !== requestedFlow || !draft.data?.revision)));
@@ -161,6 +165,7 @@ function Editor() {
   const nextNumber = useRef(draft.data?.nextNumber ?? 1);
   const selected = items.find(item => item.selected);
   const selectedEdge = selected ? undefined : edges.find(edge => edge.selected);
+  const removable = selected?.deletable === false ? undefined : selected ?? selectedEdge;
   const sources = items.filter(item => item.type === "agent" || item.type === "json" ||
     (selected?.type !== "apiResponse" && item.type === "apiInput"));
   const inputEdges = edges.filter(edge => edge.target === selected?.id);
@@ -191,6 +196,15 @@ function Editor() {
 
   useEffect(() => { renderBreadcrumbs(); }, []);
   useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (!params.get("run") || !params.get("id")) return;
+    let live = true;
+    window.lyraAdminRequest<SavedFlow>("/api/admin/flows/" + encodeURIComponent(params.get("id")!))
+      .then(saved => { if (live) setRunDesign(saved); })
+      .catch(e => { if (live) setFlowStatus(e.message); });
+    return () => { live = false; };
+  }, []);
+  useEffect(() => {
     draft.save({ items, edges, tool, nextNumber: nextNumber.current, viewport, panelSize, flowId, revision, name: flowName, lastSaved });
   }, [draft, items, edges, tool, viewport, panelSize, flowId, revision, flowName, lastSaved]);
   useEffect(() => {
@@ -217,14 +231,15 @@ function Editor() {
         return { ...node, data: { label: definition?.name ?? "Unconfigured agent", definition } };
       });
       setItems(nodes);
-      setEdges(saved.graph.edges);
+      const wires = nameExistingWires(saved.graph.edges);
+      setEdges(wires);
       setViewport(saved.graph.viewport);
       void setCanvasViewport(saved.graph.viewport);
       setPanelSize(saved.graph.panelSize);
       setFlowId(saved.id);
       setRevision(saved.revision);
       setFlowName(saved.name);
-      setLastSaved(JSON.stringify({ name: saved.name, graph: graphDocument(nodes, saved.graph.edges, saved.graph.viewport, saved.graph.panelSize) }));
+      setLastSaved(JSON.stringify({ name: saved.name, graph: graphDocument(nodes, wires, saved.graph.viewport, saved.graph.panelSize) }));
       setLoadingFlow(false);
       setFlowStatus("Flow opened.");
       nextNumber.current = nodes.length;
@@ -232,8 +247,8 @@ function Editor() {
     return () => { active = false; };
   }, [loadingFlow, catalogReady, requestedFlow, catalog, setItems, setEdges, setCanvasViewport]);
 
-  async function saveFlow(event: React.FormEvent) {
-    event.preventDefault();
+  async function saveFlow(event?: React.FormEvent) {
+    event?.preventDefault();
     if (invalidBase) return;
     setSavingFlow(true);
     setFlowStatus("Saving flow…");
@@ -253,9 +268,19 @@ function Editor() {
       history.replaceState(history.state, "", url.pathname + url.search);
       renderBreadcrumbs();
       setFlowStatus("Saved to PostgreSQL.");
+      return saved;
     } catch (error) {
       setFlowStatus(error instanceof Error ? error.message : "Could not save the flow.");
     } finally { setSavingFlow(false); }
+  }
+
+  async function openRun() {
+    if (hasChanges || !flowId || !revision) {
+      const saved = await saveFlow();
+      if (saved) setRunDesign(saved);
+    } else {
+      setRunDesign({id: flowId, name: flowName, revision, graph: {nodes: items, edges, viewport, panelSize}});
+    }
   }
 
   useEffect(() => {
@@ -302,7 +327,10 @@ function Editor() {
 
   function connect(connection: Connection) {
     if (!validConnection(connection)) return;
-    setEdges(current => addEdge({ ...connection, id: crypto.randomUUID() }, current));
+    setEdges(current => {
+      const names = new Set(current.filter(edge => edge.target === connection.target).map(edge => edge.name ?? ""));
+      return addEdge<Wire>({ ...connection, id: crypto.randomUUID(), name: nextWireName(names) }, current);
+    });
     setItems(current => current.map(node => ({ ...node, selected: node.id === connection.target })));
   }
 
@@ -310,6 +338,24 @@ function Editor() {
     const connection = { ...edge, source, sourceHandle: null };
     if (!validConnection(connection, edge.id)) return;
     setEdges(current => current.map(other => other.id === edge.id ? connection : other));
+  }
+
+  async function deleteSelection() {
+    if (!removable) return;
+    const target = { id: removable.id };
+    const { deletedEdges, deletedNodes } = await deleteElements(selected ? { nodes: [target] } : { edges: [target] });
+    if (!deletedNodes.length && !deletedEdges.length) return;
+    const removedWires = new Set(deletedEdges.map(edge => edge.id));
+    const needsRepair = items.some(node => node.type === "json" && node.id !== selected?.id &&
+      node.data.objectDefinition?.mappings.some(rule => removedWires.has(rule.edgeId)));
+    const name = selected?.data.label || selectedEdge?.name || "Wire";
+    setFlowStatus(`Removed ${name} from the flow.${needsRepair ? " Reassign or remove the disconnected JSON mappings." : ""}`);
+  }
+
+  function wireSettings(wire: Wire) {
+    return <WireSettings key={wire.id + ":" + wire.name} wire={wire} wires={edges}
+      jsonInput={items.some(item => item.id === wire.target && item.type === "json")}
+      change={patch => setEdges(current => current.map(edge => edge.id === wire.id ? { ...edge, ...patch } : edge))} />;
   }
 
   function addItem() {
@@ -333,6 +379,12 @@ function Editor() {
   }
 
   return <div className="flow-editor" style={{ "--panel-size": `${currentPanelSize}px` } as CSSProperties}>
+    {runDesign && <RunView design={runDesign} onClose={() => {
+      const url = new URL(location.href);
+      url.searchParams.delete("run");
+      history.replaceState(history.state, "", url);
+      setRunDesign(undefined);
+    }} />}
     <div className="flow-toolbar">
       <div className="flow-management" role="group" aria-label="Flow management">
       <div><h2>Flow View</h2><small>{flowId ? `Revision ${revision} · ${hasChanges ? "Unsaved changes" : "Saved"}` : "Unsaved draft"}</small></div>
@@ -340,6 +392,8 @@ function Editor() {
         <label htmlFor="flow-name">Flow name</label>
         <input id="flow-name" value={flowName} onChange={event => setFlowName(event.target.value)} required maxLength={120} />
         <button type="submit" disabled={savingFlow || loadingFlow || Boolean(invalidBase)}>Save flow</button>
+        <button type="button" disabled={savingFlow || loadingFlow || Boolean(invalidBase) || !flowName.trim()}
+          onClick={openRun}>{hasChanges ? "Save and run…" : "Run flow…"}</button>
       </form>
       <div className="flow-actions">
         <label htmlFor="saved-flow">Saved flows</label>
@@ -362,12 +416,17 @@ function Editor() {
       </div>
     </div>
     <div className={`flow-grid${resizing ? " resizing" : ""}`} ref={grid}>
-      <div className="flow-canvas">
+      <div className="flow-canvas" onKeyDown={event => {
+        if (!removable || event.repeat || event.defaultPrevented || (event.key !== "Delete" && event.key !== "Backspace")) return;
+        if ((event.target as Element).closest("input, textarea, select, [contenteditable=true]")) return;
+        event.preventDefault();
+        void deleteSelection();
+      }}>
         <ReactFlow<FlowItem> nodes={items} nodeTypes={nodeTypes} onNodesChange={onNodesChange}
           defaultViewport={draft.data?.viewport} onMoveEnd={(_, value) => setViewport(value)}
           edges={edges.map(edge => ({
-            ...edge, label: edge.id.length > 12 ? edge.id.slice(0, 8) + "…" : edge.id,
-            ariaLabel: `Connection ${edge.id}`, labelStyle: { fontSize: 11, fill: "#40336f" },
+            ...edge, label: edge.name,
+            ariaLabel: `Connection ${edge.name} (${edge.id})`, labelStyle: { fontSize: 11, fill: "#40336f" },
             labelBgStyle: { fill: "#f1edf8" }, labelBgBorderRadius: 4, labelBgPadding: [6, 4],
           }))} onEdgesChange={onEdgesChange} defaultEdgeOptions={edgeOptions}
           onEdgeClick={(_, edge) => {
@@ -417,7 +476,11 @@ function Editor() {
           else resizePanel(currentPanelSize + (event.key === increaseKey ? 20 : -20));
         }} />
       <aside id="flow-data-panel" className="flow-inspector" aria-label="Item inspector">
-        <h3>Properties</h3>
+        <div className="inspector-heading">
+          <h3>Properties</h3>
+          {removable && <button type="button" className="delete-element" onClick={deleteSelection}
+            aria-keyshortcuts="Delete Backspace">{selected ? "Delete item" : "Delete wire"}</button>}
+        </div>
         {selected?.type === "apiInput" && <>
           <strong>{selected.data.label}</strong>
           <p>This endpoint is the required starting point for the flow.</p>
@@ -432,7 +495,7 @@ function Editor() {
         </>}
         {selectedEdge && <>
           <h3>Connection</h3>
-          <label>Connection ID</label><code>{selectedEdge.id}</code>
+          {wireSettings(selectedEdge)}
           <h3>From</h3><p>{items.find(node => node.id === selectedEdge.source)?.data.label}</p>
           <h3>To</h3><p>{items.find(node => node.id === selectedEdge.target)?.data.label}</p>
           <p>This ID is preserved when the flow is saved or the connection is rewired.</p>
@@ -470,8 +533,11 @@ function Editor() {
           {selected.type === "json" && <JsonMappingInspector key={selected.id} data={selected.data}
             ports={inputEdges.map(edge => {
               const source = items.find(node => node.id === edge.source);
-              return { id: edge.id, label: source?.data.label ?? "Input", structured: source?.type === "json",
-                base: source?.type === "json" ? source.data.objectDefinition?.base : undefined };
+              const fields = source?.type === "agent" ? source.data.definition?.outputSchema?.fields : undefined;
+              const base = fields ? Object.fromEntries(fields.map(field => [field.name, field.choices[0] ?? ""]))
+                : source?.type === "json" ? source.data.objectDefinition?.base : undefined;
+              return { id: edge.id, name: edge.name!, readAs: edge.readAs, label: source?.data.label ?? "Input",
+                structured: Boolean(fields) || source?.type === "json", fields, base };
             })}
             onChange={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "agent" && selected.data.definition && <>
@@ -484,6 +550,9 @@ function Editor() {
               <p>{selected.data.definition.prompt.name} · v{selected.data.definition.prompt.version}</p>
               <pre>{promptText(selected.data.definition.prompt)}</pre>
             </> : <p>Raw user input · Incoming flow text is used directly.</p>}
+            <AgentOutput key={selected.data.definition.id + ":" + selected.data.definition.revision}
+              agent={selected.data.definition}
+              editUrl={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}&focus=output`, { node: selected.id })} />
           </>}
           <h3>Inputs</h3>
           {(selected.type === "agent" || selected.type === "json" || selected.type === "apiResponse") ? <>
@@ -498,7 +567,7 @@ function Editor() {
                     !inputEdges.some(other => other.id !== edge.id && other.source === node.id))
                     .map(node => <option key={node.id} value={node.id}>{node.data.label || "Untitled agent"}</option>)}
                 </select>
-                <code className="connection-id" title="Connection ID">{edge.id}</code>
+                {wireSettings(edge)}
                 <button type="button" aria-label={`Disconnect ${label}`}
                   onClick={() => setEdges(current => current.filter(other => other.id !== edge.id))}>Disconnect</button>
               </div>;

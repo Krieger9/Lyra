@@ -34,6 +34,7 @@ export async function mountConfiguration(page) {
         <a id="create-prompt" href="/admin/prompts/?new=1">Create a prompt in PromptStudio</a>
         <pre id="prompt-preview"></pre>
         <button id="refresh-library" type="button">Refresh prompt library</button>
+        <section id="agent-output"></section>
       </div>
       <div class="prompt-fields" hidden>
         <label for="prompt-text">Template</label>
@@ -139,13 +140,20 @@ export async function mountConfiguration(page) {
     selectionsInitialized = true;
   }
 
+  let readOutput;
   function persistDraft() {
     draft.save({
       name: name.value, instructions: instructions.value, prompt: prompt.value, text: text.value,
       revision: editing?.revision,
+      outputSchema: readOutput?.(),
     });
   }
   if (agentsPage) {
+    const { mountOutputEditor } = await import("/admin/output-editor.js?v=" + encodeURIComponent(window.lyraAssetVersion));
+    const output = host.querySelector("#agent-output");
+    readOutput = mountOutputEditor(output, draft.data && "outputSchema" in draft.data
+      ? draft.data.outputSchema : editing?.outputSchema, persistDraft);
+    if (query.get("focus") === "output") output.querySelector("select").focus();
     populatePrompts();
     for (const field of ["instructions", "prompt"]) {
       const link = host.querySelector("#create-" + field);
@@ -181,7 +189,7 @@ export async function mountConfiguration(page) {
           const [name, version] = JSON.parse(select.value);
           return { name, version };
         };
-        payload = { name: name.value, instructions: ref(instructions), prompt: ref(prompt) };
+        payload = { name: name.value, instructions: ref(instructions), prompt: ref(prompt), outputSchema: readOutput(true) };
         endpoint = "/api/admin/agents";
         if (editing) {
           endpoint += "/" + editing.id;

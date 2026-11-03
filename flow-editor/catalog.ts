@@ -1,9 +1,11 @@
 export type PromptReference = { name: string; version: number };
+export type OutputField = { name: string; type: "text" | "choice"; description: string; required: boolean; choices: string[] };
 export type AgentDefinition = {
   id: string;
   name: string;
   instructions: PromptReference;
   prompt: PromptReference | null;
+  outputSchema: { fields: OutputField[] } | null;
   revision: number;
 };
 export type LibraryPrompt = PromptReference & { text: string };

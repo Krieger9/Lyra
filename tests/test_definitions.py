@@ -10,9 +10,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from agent_definitions import create_schema, definitions, metadata, seed_defaults
+from agent_store import create_schema, definitions, metadata, seed_defaults
 from app import app
-from auth import require_admin_access
+from auth import require_admin_access, require_chat_access, require_mcp_access
 
 
 @unittest.skipUnless(os.getenv("LYRA_TEST_DATABASE_URL"), "Set LYRA_TEST_DATABASE_URL for isolated PostgreSQL checks")
@@ -105,6 +105,7 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         created = (await self.client.post("/api/admin/agents", json=self.body)).json()
         table = self.schema + ".agent_definitions"
         with self.engine.begin() as connection:
+            connection.execute(text(f"ALTER TABLE {table} DROP COLUMN output_schema"))
             connection.execute(text(f"ALTER TABLE {table} ALTER COLUMN prompt_name SET NOT NULL, "
                                     "ALTER COLUMN prompt_version SET NOT NULL"))
             connection.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT agent_prompt_reference_complete"))
@@ -115,6 +116,7 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         catalog = (await self.client.get("/api/admin/catalog")).json()
         old = next(agent for agent in catalog["agents"] if agent["id"] == created["id"])
         self.assertEqual(old["prompt"], self.body["prompt"])
+        self.assertIsNone(old["outputSchema"])
         with self.assertRaises(IntegrityError):
             with self.storage.engine.begin() as connection:
                 connection.execute(definitions.update().where(
@@ -127,6 +129,100 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "api-response", "type": "apiResponse", "position": {"x": 700, "y": 100}, "data": {"label": "API Response"}},
             ], "edges": [],
         }
+
+    async def test_debug_export_and_chat_pin_the_executed_graph(self):
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+        from app import mcp_server
+
+        graph = self.flow_graph()
+        graph["nodes"].append({"id": "merge", "type": "json", "position": {"x": 2, "y": 1},
+            "data": {"label": "Merge", "objectDefinition": {"base": {"original": None},
+                "mappings": [{"edgeId": "raw", "source": ".value", "target": "/original"}]}}})
+        graph["edges"] = [{"id": "raw", "name": "request", "source": "api-input", "target": "merge"},
+                          {"id": "out", "source": "merge", "target": "api-response"}]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Original", "graph": graph})).json()
+        url = "/api/admin/flows/" + flow["id"]
+        self.assertEqual((await self.client.post(url + "/runs", json={"revision": 2})).status_code, 409)
+        debug = await self.client.post(url + "/runs", json={"input": "  hello  ", "revision": 1})
+        self.assertEqual(debug.status_code, 202, debug.text)
+        run_id = debug.json()["id"]
+        read = "/api/admin/runs/" + run_id
+        record = (await self.client.get(read)).json()
+        self.assertEqual(record["result"], {"original": "  hello  "})
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(record["events"][-1]["kind"], "run.completed")
+        binding = "/api/admin/chat-flow/" + flow["id"]
+        self.assertEqual((await self.client.put(binding, json={"revision": 1})).status_code, 200)
+        graph["nodes"][-1]["data"]["objectDefinition"]["base"]["later"] = True
+        await self.client.put(url, json={"name": "Later", "graph": graph, "revision": 1})
+        with patch.dict(app.dependency_overrides, {require_chat_access: lambda: ["User.Chat"]}):
+            chat = await self.client.post("/api/chat", json={"message": "  chat  "})
+        self.assertEqual(chat.json(), {"reply": {"original": "  chat  "}})
+        chat_run = (await self.client.get("/api/admin/runs/" + chat.headers["X-Lyra-Run-Id"])).json()
+        self.assertEqual((chat_run["source"], chat_run["revision"]), ("chat", 1))
+        self.assertEqual((await self.client.delete(binding + "?revision=2")).status_code, 409)
+        self.assertEqual((await self.client.delete(binding + "?revision=1")).status_code, 200)
+        grant = patch.dict(app.dependency_overrides, {require_mcp_access: lambda: ["User.Admin"]})
+        grant.start()
+        self.addCleanup(grant.stop)
+        async with mcp_server.session_manager.run(), streamable_http_client(
+            "http://localhost:8765/mcp", http_client=self.client) as (reader, writer, _):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                listing = await session.list_tools()
+                self.assertEqual({tool.name for tool in listing.tools}, {"list_flow_runs", "inspect_flow_run"})
+                reply = await session.call_tool("inspect_flow_run", {"run_id": run_id, "limit": 2})
+                self.assertFalse(reply.isError, reply.content)
+                page = reply.structuredContent
+                self.assertTrue(page["hasMore"])
+                self.assertEqual(page["snapshot"]["name"], "Original")
+                rest = await session.call_tool("inspect_flow_run", {"run_id": run_id, "after": page["events"][-1]["seq"],
+                                                                     "include_snapshot": False})
+                self.assertNotIn("snapshot", rest.structuredContent)
+                self.assertEqual(page["events"] + rest.structuredContent["events"], record["events"])
+
+    async def test_structured_classifier_test_and_flow_use_same_output(self):
+        schema = {"fields": [
+            {"name": "category", "type": "choice", "choices": ["conversation", "intelligence"]},
+            {"name": "explanation", "type": "text", "description": "Explain the chosen category."},
+        ]}
+        agent = (await self.client.post("/api/admin/agents", json=self.body | {"outputSchema": schema})).json()
+        url = "/api/admin/agents/" + agent["id"]
+        legacy_edit = await self.client.put(url, json=self.body | {"revision": 1})
+        self.assertEqual(legacy_edit.json()["outputSchema"], agent["outputSchema"])
+        model = SimpleNamespace(complete=AsyncMock(return_value='{"category":"conversation","explanation":"A greeting."}'))
+        app.state.studio.model, app.state.studio.traces = model, Mock()
+        tested = await self.client.post(url + "/test", json={"input": "Hello"})
+        self.assertEqual(tested.json()["output"], {"category": "conversation", "explanation": "A greeting."})
+        self.assertIn("Explain the chosen category.", model.complete.await_args.args[0])
+        graph = self.flow_graph()
+        graph["nodes"] += [
+            {"id": "agent", "type": "agent", "position": {"x": 1, "y": 2}, "data": {"definition": agent}},
+            {"id": "json", "type": "json", "position": {"x": 2, "y": 2}, "data": {"objectDefinition": {
+                "base": {"Category": None}, "mappings": [{"edgeId": "classification", "source": ".value/category", "target": "/Category"}]}}},
+        ]
+        graph["edges"] = [{"id": key, "source": source, "target": target} for key, source, target in [
+            ("input", "api-input", "agent"), ("classification", "agent", "json"), ("response", "json", "api-response")]]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Classifier", "graph": graph})).json()
+        run = "/api/admin/flows/" + flow["id"] + "/run"
+        self.assertEqual((await self.client.post(run, json={"input": "Hello"})).json(), {"Category": "conversation"})
+        model.complete.return_value = '{"category":"chat","explanation":"A greeting."}'
+        for endpoint in [run, url + "/test"]:
+            bad = await self.client.post(endpoint, json={"input": "Hello"})
+            self.assertEqual(bad.status_code, 502)
+            for part in ["Planner", "category", "conversation", "intelligence", "chat"]:
+                self.assertIn(part, bad.json()["detail"])
+        latest = (await self.client.get("/api/admin/runs", params={"flow_id": flow["id"]})).json()[0]
+        failure = (await self.client.get("/api/admin/runs/" + latest["id"])).json()
+        self.assertEqual(failure["status"], "failed")
+        evidence = failure["events"]
+        self.assertEqual([e["data"]["actual"] for e in evidence if e["kind"] == "gate.evaluated"
+                          and not e["data"]["passed"]], ["chat"])
+        self.assertTrue(any(e["kind"] == "template.started" and e["data"]["template"] == "{{ request }}" for e in evidence))
+        self.assertFalse(any(e["kind"] == "node.started" and e["node"] == "json" for e in evidence))
+        reset = await self.client.put(url, json=self.body | {"revision": 2, "outputSchema": None})
+        self.assertIsNone(reset.json()["outputSchema"])
 
     async def test_flow_save_open_update_and_conflict(self):
         graph = self.flow_graph()
@@ -227,7 +323,8 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved.status_code, 201, saved.text)
         url = "/api/admin/flows/" + saved.json()["id"]
         opened = (await self.client.get(url)).json()
-        self.assertEqual(opened["graph"]["edges"], graph["edges"])
+        self.assertEqual([{key: edge[key] for key in ("id", "source", "target")}
+                          for edge in opened["graph"]["edges"]], graph["edges"])
         self.assertEqual(opened["graph"]["nodes"][-1]["type"], "json")
         app.state.studio.model = SimpleNamespace(complete=AsyncMock())
         failed = await self.client.post(url + "/run", json={"input": "request"})
@@ -284,3 +381,41 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         invalid = await self.client.post(url + "/run", json={"input": payload})
         self.assertEqual(invalid.status_code, 422)
         model.complete.assert_not_awaited()
+
+    async def test_named_wire_bindings_survive_rename_and_parse_explicitly(self):
+        graph = self.flow_graph()
+        agent = (await self.client.post("/api/admin/agents", json={"name": "Classifier"})).json()
+        mapping = {"base": {"Category": None, "Text": None}, "mappings": [
+            {"edgeId": "stable-A", "source": ".value/category", "target": "/Category"},
+            {"edgeId": "stable-B", "source": ".value", "target": "/Text"},
+        ]}
+        graph["nodes"] += [
+            {"id": "classifier", "type": "agent", "position": {"x": 1, "y": 1}, "data": {"definition": agent}},
+            {"id": "contract", "type": "json", "position": {"x": 2, "y": 2}, "data": {"objectDefinition": mapping}},
+        ]
+        graph["edges"] = [
+            {"id": "start", "source": "api-input", "target": "classifier", "name": "request"},
+            {"id": "stable-B", "source": "api-input", "target": "contract", "name": "request"},
+            {"id": "stable-A", "source": "classifier", "target": "contract", "name": "classification", "readAs": "json"},
+            {"id": "end", "source": "contract", "target": "api-response"},
+        ]
+        app.state.studio.model = SimpleNamespace(complete=AsyncMock(return_value='{"category":42}'))
+        app.state.studio.traces = Mock()
+        saved = await self.client.post("/api/admin/flows", json={"name": "Classifier", "graph": graph})
+        self.assertEqual(saved.status_code, 201, saved.text)
+        url = "/api/admin/flows/" + saved.json()["id"]
+        raw = '  {"keep":"as text"}\n'
+        expected = {"Category": 42, "Text": raw}
+        graph["edges"][2]["name"] = "request"
+        body = {"name": "Classifier", "graph": graph, "revision": 1}
+        self.assertEqual((await self.client.put(url, json=body)).status_code, 422)
+        graph["edges"][2]["name"] = "result"
+        self.assertEqual((await self.client.put(url, json=body)).status_code, 200)
+        opened = (await self.client.get(url)).json()["graph"]
+        self.assertEqual((opened["edges"][2]["name"], opened["edges"][2]["id"]), ("result", "stable-A"))
+        self.assertEqual(opened["nodes"][-1]["data"]["objectDefinition"], mapping)
+        self.assertEqual((await self.client.post(url + "/run", json={"input": raw})).json(), expected)
+        preview = {"definition": mapping, "inputs": {"stable-A": '{"category":42}', "stable-B": raw}}
+        self.assertEqual((await self.client.post("/api/admin/flows/preview-json", json=preview)).status_code, 422)
+        preview["readAs"] = {"stable-A": "json"}
+        self.assertEqual((await self.client.post("/api/admin/flows/preview-json", json=preview)).json(), expected)

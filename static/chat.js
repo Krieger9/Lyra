@@ -149,8 +149,8 @@ reset.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const message = draft.value.trim();
-  if (!message || busy || accountButton.disabled) return;
+  const message = draft.value;
+  if (!message.trim() || busy || accountButton.disabled) return;
   if (needsSignIn) {
     await changeSignIn();
     return;
@@ -160,6 +160,7 @@ form.addEventListener("submit", async (event) => {
   draft.value = "";
   updateControls();
   const pending = appendTurn("user", message);
+  let inspectLink;
   statusLine.textContent = "Lyra is thinking…";
   try {
     const token = await client.acquireTokenSilent({ scopes, account });
@@ -169,13 +170,23 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({ message, history }),
     });
     const data = await response.json();
+    const runId = response.headers.get("X-Lyra-Run-Id");
+    const flowId = response.headers.get("X-Lyra-Flow-Id");
+    if (runId && flowId && !configureLink.hidden) {
+      inspectLink = document.createElement("a");
+      inspectLink.href = "/admin/flow/?" + new URLSearchParams({ id: flowId, run: runId });
+      inspectLink.textContent = "Inspect run";
+    }
     if (response.status === 401) needsSignIn = true;
     if (response.status === 403) configureLink.hidden = true;
     if (!response.ok) {
       throw new Error(typeof data.detail === "string" ? data.detail : "Lyra couldn’t process that message.");
     }
-    appendTurn("assistant", data.reply);
-    history.push({ role: "user", content: message }, { role: "assistant", content: data.reply.slice(0, 8000) });
+    const reply = typeof data.reply === "string" ? data.reply : JSON.stringify(data.reply, null, 2);
+    const entry = appendTurn("assistant", reply);
+    if (inspectLink) entry.append(inspectLink);
+    history.push({ role: "user", content: message });
+    if (reply.trim()) history.push({ role: "assistant", content: reply.slice(0, 8000) });
     history = history.slice(-12);
     statusLine.textContent = "";
   } catch (error) {
@@ -183,6 +194,7 @@ form.addEventListener("submit", async (event) => {
     welcome.hidden = history.length > 0;
     draft.value = message;
     statusLine.textContent = error instanceof TypeError ? "Couldn’t reach Lyra. Please try again." : error.message;
+    if (inspectLink) statusLine.append(" ", inspectLink);
     if (error instanceof msal.InteractionRequiredAuthError || needsSignIn) {
       needsSignIn = true;
       lockChat();

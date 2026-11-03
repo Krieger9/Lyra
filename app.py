@@ -7,18 +7,25 @@ from typing import Annotated, Literal
 
 from agent_studio import (
     AgentStudio, Endpoint, PostgresTraceAdapter, Model, ModelGroup,
-    OllamaAgentAdapter, PromptStudioAdapter, Protocol,
+    PromptStudioAdapter, Protocol,
 )
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from prompt_studio import NotFoundError, PromptLibrary, SQLAlchemyStorage
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, JsonValue, StringConstraints
 
 from auth import require_admin_access, require_chat_access, settings
-from agent_definitions import create_schema as create_agent_schema, router as definitions_router, seed_defaults
-from flows import create_schema as create_flow_schema, router as flows_router
+from agent_definitions import router as definitions_router
+from agent_store import create_schema as create_agent_schema, seed_defaults
+from flows import router as flows_router
+from flow_graph import flows
+from flow_execution import perform
+from run_store import Run, activation, active, runs, events
+from run_api import router as run_router
+from run_mcp import install_mcp
+from model_adapter import MeteredOllamaAdapter
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -57,12 +64,12 @@ class Turn(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: MessageText
+    message: str = Field(min_length=1, max_length=8000, pattern=r"\S")
     history: list[Turn] = Field(default_factory=list, max_length=12)
 
 
 class ChatReply(BaseModel):
-    reply: str
+    reply: str | dict[str, JsonValue]
 
 
 @asynccontextmanager
@@ -75,7 +82,7 @@ async def lifespan(app: FastAPI):
         traces = PostgresTraceAdapter(storage.engine)
         traces.create_schema()
         create_agent_schema(storage.engine)
-        create_flow_schema(storage.engine)
+        flows.metadata.create_all(storage.engine, tables=[flows, runs, events, active])
         library = PromptLibrary(storage, name="lyra")
         seed_defaults(library)
         try:
@@ -89,10 +96,11 @@ async def lifespan(app: FastAPI):
             Protocol.OLLAMA, (ModelGroup("local", (model,)),),
         )
         app.state.studio = AgentStudio(
-            PromptStudioAdapter(library), OllamaAgentAdapter(endpoint, model),
+            PromptStudioAdapter(library), MeteredOllamaAdapter(endpoint, model),
             traces,
         )
-        yield
+        async with mcp_server.session_manager.run():
+            yield
     finally:
         storage.engine.dispose()
 
@@ -100,6 +108,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Lyra Chat", lifespan=lifespan)
 app.include_router(definitions_router)
 app.include_router(flows_router)
+app.include_router(run_router)
+mcp_server = install_mcp(app)
 MSAL = ROOT / "node_modules/@azure/msal-browser/lib"
 
 
@@ -156,7 +166,20 @@ def msal_bridge():
 
 
 @app.post("/api/chat", response_model=ChatReply, dependencies=[Depends(require_chat_access)])
-async def chat(body: ChatRequest, request: Request):
+async def chat(body: ChatRequest, request: Request, response: Response):
+    studio = request.app.state.studio
+    library = studio.prompts.library
+    document = activation(library)
+    if document:
+        run = Run(library, document, "chat")
+        response.headers["X-Lyra-Run-Id"] = str(run.id)
+        response.headers["X-Lyra-Flow-Id"] = document["id"]
+        try:
+            reply = await perform(document, library, studio, body.message, run)
+        except HTTPException as exc:
+            raise HTTPException(exc.status_code, "Chat flow failed. An administrator can inspect the run.",
+                                headers={"X-Lyra-Run-Id": str(run.id), "X-Lyra-Flow-Id": document["id"]}) from exc
+        return ChatReply(reply=reply)
     try:
         reply = await request.app.state.studio.run(
             body.message, prompt=PROMPT,

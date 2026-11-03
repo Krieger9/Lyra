@@ -32,6 +32,8 @@ class EntraAuth:
     def __init__(self):
         self.tenant = str(UUID(os.environ["ENTRA_TENANT_ID"]))
         self.frontend = str(UUID(os.environ["ENTRA_FE_CLIENT_ID"]))
+        self.mcp_clients = {client.strip().lower() for client in os.getenv("ENTRA_MCP_CLIENT_IDS", "").split(",")
+                            if client.strip()}
         self.backend = str(UUID(os.environ["ENTRA_BE_CLIENT_ID"]))
         self.resource = os.environ["ENTRA_API_URI"].strip().rstrip("/")
         self.scope = os.environ["ENTRA_CHAT_SCOPE"].strip()
@@ -58,7 +60,7 @@ class EntraAuth:
                 or "/" in self.admin_scope or any(c.isspace() for c in self.admin_scope)):
             raise HTTPException(503, "Configure a distinct ENTRA_ADMIN_SCOPE and permitted admin roles.")
 
-    def authorize(self, token: str, *, admin: bool = False):
+    def authorize(self, token: str, *, admin: bool = False, mcp: bool = False):
         if admin:
             self.check_admin_config()
         try:
@@ -79,7 +81,8 @@ class EntraAuth:
             raise HTTPException(503, "Could not reach the Entra signing key service.") from exc
         except jwt.PyJWTError as exc:
             raise HTTPException(401, "Invalid or expired access token.", headers={"WWW-Authenticate": "Bearer"}) from exc
-        if claims.get("azp" if v2 else "appid") != self.frontend:
+        client_id = claims.get("azp" if v2 else "appid")
+        if client_id != self.frontend and not (admin and mcp and client_id in self.mcp_clients):
             raise HTTPException(403, "Access token was not issued to the Lyra frontend.")
         scopes = claims.get("scp")
         required_scope = self.admin_scope if admin else self.scope
@@ -110,3 +113,9 @@ def require_admin_access(credentials: HTTPAuthorizationCredentials | None = Depe
     if credentials is None:
         raise HTTPException(401, "Sign in to configure Lyra.", headers={"WWW-Authenticate": "Bearer"})
     settings().authorize(credentials.credentials, admin=True)
+
+
+def require_mcp_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+    if credentials is None:
+        raise HTTPException(401, "An administrator access token is required.", headers={"WWW-Authenticate": "Bearer"})
+    settings().authorize(credentials.credentials, admin=True, mcp=True)

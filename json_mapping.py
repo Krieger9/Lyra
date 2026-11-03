@@ -69,9 +69,11 @@ def lookup(value, path):
 def source_path(expression):
     if expression == ".text":
         return None
+    if expression == ".value" or expression.startswith(".value/"):
+        return pointer(expression[6:])
     if expression == ".json" or expression.startswith(".json/"):
         return pointer(expression[5:])
-    raise MappingError("Use .text, .json or .json/path for the source.")
+    raise MappingError("Choose a wire value, a field path, text or parsed JSON.")
 
 
 def validate_mappings(definition, edge_ids):
@@ -92,30 +94,44 @@ def validate_mappings(definition, edge_ids):
             raise MappingError(f"Mapping {index}: {exc}") from exc
 
 
-def assemble(definition, inputs):
+def parse_text(value):
+    try:
+        parsed = json.loads(value)
+        check_size(parsed)
+        return parsed
+    except (ValueError, RecursionError) as exc:
+        raise MappingError("Incoming text is not usable JSON.") from exc
+
+
+def assemble(definition, inputs, read_as=None, observe=None):
     validate_mappings(definition, inputs.keys())
+    read_as = read_as or {}
     result = deepcopy(definition.base)
     parsed = {}
     for index, rule in enumerate(definition.mappings, 1):
         value = inputs[rule.edgeId]
         path = source_path(rule.source)
         try:
+            parse_json = read_as.get(rule.edgeId) == "json" or rule.source.startswith(".json")
+            if isinstance(value, str) and parse_json:
+                if rule.edgeId not in parsed:
+                    parsed[rule.edgeId] = parse_text(value)
+                value = parsed[rule.edgeId]
             if path is None:
                 value = value if isinstance(value, str) else json_text(value)
             else:
-                if isinstance(value, str):
-                    if rule.edgeId not in parsed:
-                        try:
-                            parsed[rule.edgeId] = json.loads(value)
-                            check_size(parsed[rule.edgeId])
-                        except (ValueError, RecursionError) as exc:
-                            raise MappingError("Incoming text is not usable JSON.") from exc
-                    value = parsed[rule.edgeId]
+                if path and isinstance(value, str) and not parse_json:
+                    raise MappingError("This wire carries text. Choose Read as JSON to access fields.")
                 value = lookup(value, path)
             target = pointer(rule.target)
             parent = lookup(result, target[:-1])
             parent[slot(parent, target[-1])] = value
             check_size(result)
+            if observe:
+                observe("mapping.applied", index=index, wire=rule.edgeId, source=rule.source,
+                        target=rule.target, readAs=read_as.get(rule.edgeId, "value"), value=value)
         except MappingError as exc:
+            if observe:
+                observe("mapping.failed", index=index, rule=rule.model_dump(), error=str(exc))
             raise MappingError(f"Mapping {index} to {rule.target}: {exc}") from exc
     return result

@@ -35,6 +35,9 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.studio = studio.start()
         self.studio.run.return_value = "hello"
         self.addCleanup(studio.stop)
+        binding = patch("app.activation", return_value=None)
+        binding.start()
+        self.addCleanup(binding.stop)
         self.browser = httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://localhost:8765")
         self.addAsyncCleanup(self.browser.aclose)
         now = int(time.time())
@@ -76,8 +79,15 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_definition_endpoints_require_admin_scope_and_role(self):
         requests = [
+            ("POST", "/mcp"),
+            ("GET", "/api/admin/runs"),
+            ("GET", "/api/admin/runs/" + str(uuid4())),
+            ("POST", "/api/admin/flows/" + str(uuid4()) + "/runs"),
+            ("PUT", "/api/admin/chat-flow/" + str(uuid4())),
+            ("DELETE", "/api/admin/chat-flow/" + str(uuid4())),
             ("GET", "/api/admin/catalog"),
             ("POST", "/api/admin/agents"),
+            ("POST", "/api/admin/agents/" + str(uuid4()) + "/test"),
             ("PUT", "/api/admin/agents/" + str(uuid4())),
             ("POST", "/api/admin/prompts"),
             ("GET", "/api/admin/flows"),
@@ -101,6 +111,17 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             response = await self.browser.get(path, headers=self.headers(roles=[role]))
             self.assertEqual(response.json(), {"can_configure": visible})
             self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    async def test_mcp_client_delegation_is_limited_to_mcp(self):
+        client_id = str(uuid4())
+        with patch.dict("os.environ", {"ENTRA_MCP_CLIENT_IDS": client_id}):
+            settings.cache_clear()
+            delegated = self.headers(azp=client_id, scp="access-as-admin", roles=["User.Admin"])
+            token = delegated["Authorization"].removeprefix("Bearer ")
+            self.assertEqual(settings().authorize(token, admin=True, mcp=True), ["User.Admin"])
+            self.assertEqual((await self.browser.get("/api/admin/runs", headers=delegated)).status_code, 403)
+            denied = self.headers(azp=client_id, scp="access-as-admin", roles=["User.Chat"])
+            self.assertEqual((await self.browser.post("/mcp", headers=denied)).status_code, 403)
 
     async def test_missing_admin_config_leaves_chat_available(self):
         with patch.dict("os.environ", {"ENTRA_ADMIN_SCOPE": ""}):

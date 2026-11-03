@@ -57,31 +57,30 @@ After editing the TypeScript or CSS in `flow-editor/`, run `npm run build` and r
 
 Use **Agents** in the left navigation to list, create and edit reusable definitions. Each definition has a name, system instructions and an input configuration. **Prompt** defaults to **Raw user input**, meaning incoming flow text is passed through directly. Select a versioned PromptStudio template to format that input instead. The API represents raw input as `prompt: null`.
 
+Under **Output**, select **Structured object** and add required or optional fields. For **User Input Classifier**, use a required single-choice field named `category` with `conversation` and `intelligence` on separate lines, and a required text field named `explanation` with a description asking for the reason. Save the definition. In Flow View, select the agent and open **Test agent** to run a sample against the saved definition and inspect the validated output.
+
 On startup Lyra seeds `Instructions.default` with `You are a helpful agent` if its first version is absent. This is a normal PromptStudio entry, and edits publish new versions. New agents default to its latest version. Agents retain their selected instruction and template versions until explicitly edited. Requests that omit instructions use the latest default, and requests that omit the prompt use raw input. The startup schema update allows existing definitions to use raw input while retaining their template references.
 
 The editor previews selected library text and links to **PromptStudio** to create new prompts or publish revisions. Saving a prompt opened from an agent field returns to that agent form with the new version selected in that field. Saving from the standalone PromptStudio list returns to the list. Creating or editing an agent from a flow item returns to that flow and assigns the saved definition to the originating item.
 
 Breadcrumbs show the context across admin pages. Use them or the Back and Forward controls to navigate. Unsaved forms and flow layouts, including wiring and canvas position, are restored from browser session storage in the current tab. Saved definitions and prompt versions persist in PostgreSQL.
 
-Every flow also includes a permanent **API Response**. Connect one Agent's right output port to its left input port to return that Agent's exact text as the response body. A successful run returns HTTP 200, with an empty body when API Response is unconnected. Failed runs return an error status. Existing browser drafts gain this response node automatically.
+Every flow also includes a permanent **API Response**. Connect one Agent's right output port to its left input port to return its text or structured object as the response body. A successful run returns HTTP 200, with an empty body when API Response is unconnected. Failed runs return an error status. Existing browser drafts gain this response node automatically.
 
-Choose **JSON** under Item type to combine inputs into an object. Each JSON node owns a base JSON object and a list of field mappings. Start with literal defaults or `null` placeholders, connect the inputs, then choose **Add mapping** in Properties. Each rule selects an incoming wire, a read expression and an existing destination path. The wire ID stays stable when its source is renamed or rewired. A disconnected wire must be reassigned in its mapping. Older JSON nodes can be configured with **Define object**.
+Choose **JSON** under Item type to combine inputs into an object. In **Inputs**, enter a **Wire name** and choose **Apply name**. Names like `request` or `classification` are local to the receiving node. Use letters, digits and underscores, starting with a letter or underscore. Wires display their names on the canvas. Select a wire or inspect its input or mapping row for the full connection ID.
 
-For example, use this base to assemble a session update:
+For a structured classifier, leave both wires **As received**. Choose **Source field** in a mapping row or enter the following object template. Agents that emit JSON as text can still use **Read as JSON**.
 
 ```json
-{"session":{"id":null,"phase":"open"},"message":""}
+{"Request":{"Category":"{{ classification.category }}","Text":"{{ request }}"}}
 ```
 
-| Incoming wire | Read expression | Write to field |
-| --- | --- | --- |
-| API Input | `.json/sessionId` | `/session/id` |
-| Agent output | `.text` | `/message` |
+Quoted whole-value expressions resolve to the original JSON type. A bare name copies the whole wire value. A dot reads an object field. Use `items[0]` for indices or bracketed JSON strings for keys containing punctuation. Bindings in the template and field mapping rows are two views of the same ID-based rule. Renaming a wire updates its displayed references. Rewiring retains its ID. Disconnecting creates a missing reference to repair in the mapping row. To store a literal whole-value expression in the template, prefix it with an escaped backslash, for example `"\\{{ request }}"`.
 
-An input object containing `{"sessionId":42}` and an Agent reply of `Hello` produce `{"session":{"id":42,"phase":"open"},"message":"Hello"}`. **Preview with sample inputs** evaluates the same rules as a saved run using sample values for each wire. Previewing requires admin access and does not call the model.
+**Preview with sample inputs** applies the wire interpretation and evaluates the same rules as a saved run. The sample format describes what the upstream node supplies. For structured classifier output, use a JSON sample such as `{"category":"conversation","explanation":"The input is a greeting."}`. Previewing requires admin access and does not call the model.
 
-- `.text` preserves incoming text, including whitespace. Structured input becomes compact JSON text with sorted object keys.
-- `.json` copies a whole JSON value. `.json/path` reads a field, parsing text as JSON when necessary. Arrays, objects, booleans, numbers and null retain their types.
+- In the row editor, `.value` takes the whole interpreted wire value and `.value/category` reads a field. With **As received**, a string that looks like JSON stays a string. `.text` explicitly requests text, displayed inline as `text(request)`. Structured values become compact JSON text with sorted object keys.
+- Existing `.json` and `.json/path` rules retain their parsing behavior and appear inline as `json(request)` or `json(request).field`. Arrays, objects, booleans, numbers and null retain their types.
 - Paths use slash-separated keys and zero-based array indices, such as `/messages/0/content`. Use `~1` for a slash in a key and `~0` for a tilde. Destination fields and indices must exist in the base. Each mapping owns one destination, so two rules cannot write to the same field or its parent and child.
 - Runs validate connected wires, read expressions and destinations before calling agents. Missing values and invalid JSON input produce HTTP 422 when that input is read. Each run starts with a fresh copy of the base. Nodes support up to 64 mappings and an assembled object up to 256 KiB.
 
@@ -89,7 +88,7 @@ The run API accepts text, an object or an array in the `input` field. JSON nodes
 
 Enter a **Flow name** and select **Save flow** to persist the graph, Agent identities, canvas viewport and panel size in `agent_studio.flows`. Use **Saved flows** and **Open flow** to restore a design, or **New flow** to start another. Updates use a revision check to protect against stale edits. Unfinished configurations can be saved as drafts.
 
-Flow management and execution use the existing admin scope and role. `GET/POST /api/admin/flows` lists or creates flows. `GET/PUT /api/admin/flows/{id}` opens or updates one. `POST /api/admin/flows/{id}/run` accepts `{"input":"incoming text"}`. Agent calls use AgentStudio, render versioned instructions and optional templates through PromptStudio, and record traces. Each connected Agent currently requires exactly one incoming source. Connected unconfigured agents, cycles and unsupported joins return HTTP 422 before any model call. Model failures return 503 and execution timeouts return 504. A connected API Response returns the selected Agent's output as `text/plain`, preserving whitespace.
+Flow management and execution use the existing admin scope and role. `GET/POST /api/admin/flows` lists or creates flows. `GET/PUT /api/admin/flows/{id}` opens or updates one. `POST /api/admin/flows/{id}/run` accepts `{"input":"incoming text"}`. Agent calls use AgentStudio, render versioned instructions and optional templates through PromptStudio, and record traces. Each connected Agent currently requires exactly one incoming source. Connected unconfigured agents, cycles and unsupported joins return HTTP 422 before any model call. Model failures return 503 and execution timeouts return 504. Text responses preserve whitespace. Structured responses use `application/json`. Invalid model output fails at the producing agent with HTTP 502.
 
 All definition and prompt APIs require `ENTRA_ADMIN_SCOPE` and `User.Admin`. Updates to an agent carry its revision and return HTTP 409 if another editor has saved a newer revision. Prompt edits publish new versions, and existing agents retain their selected versions until explicitly updated.
 
@@ -105,6 +104,31 @@ With PostgreSQL already running, use the Windows PowerShell scripts from the Lyr
 `start.ps1` starts FastAPI in the background and waits for the chat UI. It reuses a running local Ollama server, or starts one if the configured loopback endpoint is offline. A remote `OLLAMA_HOST` is managed separately. `stop.ps1` stops only processes these scripts started. Both commands can be run repeatedly. Logs are in `.lyra/run/`. Manage PostgreSQL separately using the commands above.
 
 Open [Lyra Chat](http://localhost:8765/). Signed-out visitors go directly to Microsoft sign-in. After FastAPI verifies the chat access token, users with an admin role see **Configure Lyra**. Enter sends a message and Shift + Enter adds a line. **New chat** or a page refresh clears the tab’s conversation.
+
+## Run and inspect a saved flow
+
+Open a saved flow and choose **Run flow** (or **Save and run** for a draft). Enter raw input and run the displayed revision. The design stays in its editor while a read-only diagram shows the selected execution. Select a node to see the values on its incoming wires, its output, elapsed times and detailed events. The recent-runs selector includes API, debugger and chat executions. **Export run JSON** includes the captured graph and agent definitions.
+
+Under **Chat connection**, **Use this revision in Lyra chat** pins the graph and resolved agent definitions for that library. Later design edits apply to debug runs when saved. To publish changed agents on the same flow revision, disconnect and activate again. Active chat passes the raw message into API Input and displays the API Response body, including structured JSON. Admins can follow **Inspect run** from chat. Disconnecting restores the built-in chat prompt and its history input.
+
+### Execution state and integration
+
+| Boundary | Responsibility |
+|---|---|
+| Agent store and flow graph | Persist design-time definitions, validate the graph, resolve agent revisions for a snapshot. |
+| Flow execution | Plan dependencies once, dispatch nodes, validate outputs and return the response. Chat, synchronous API calls and background debugger runs share this executor. |
+| Agent and model adapters | Render versioned templates, insert the default schema, correlate AgentStudio traces and record model requests, responses and available usage. The Ollama adapter captures the actual provider JSON bodies and timing fields. |
+| Run store | Keep the activated chat snapshot, per-run snapshots and sequenced execution events in PostgreSQL. Each event carries a run-relative time and node ID when applicable. Record the operands and outcomes of schema checks and the value written by each mapping. |
+| Admin REST, Flow View and MCP | Inspect the same evidence. Inspecting a recorded execution does not call the model again. |
+
+`POST /api/admin/flows/{id}/runs` takes `input` and the expected `revision` and returns HTTP 202 with a run ID. Use `GET /api/admin/runs?flow_id=…` for history and `GET /api/admin/runs/{id}?after=0&limit=100` for ordered events. Fetch subsequent pages using the last sequence number and `include_snapshot=false`. Synchronous flow responses include `X-Lyra-Run-Id`. The run record distinguishes a successful model call from an invalid agent output. A terminated worker's unfinished run is reported as interrupted after the timeout and grace period.
+
+**MCP export.** Connect a Streamable HTTP client to `http://localhost:8765/mcp` with an Entra bearer token for the Lyra backend, delegated admin scope and assigned admin role. The Lyra frontend client ID is accepted. To use a separately registered client with delegated admin permission, add its client ID to `ENTRA_MCP_CLIENT_IDS` and restart Lyra. That allowlist applies only to MCP. The client supplies its access token through its authorization configuration.
+
+- `list_flow_runs` lists recent runs, optionally filtered by flow ID, with offset and limit.
+- `inspect_flow_run` exports the graph, agents, result and events as structured data. Use `after` and `limit` to page through larger runs. These tools are read-only. An agent assisting with a design can inspect actual values and propose a change.
+
+Run evidence includes original messages, prompt text and model output. It persists in the local database until removed by an operator. Debug runs execute in the serving process. After a process interruption the available evidence remains inspectable.
 
 ## Chat API
 
