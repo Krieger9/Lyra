@@ -71,8 +71,13 @@ def _provider_catalog(connection):
     connection.exec_driver_sql("ALTER TABLE providers ALTER COLUMN protocol_id SET NOT NULL")
 
 
+def _conversation_state(connection):
+    from conversation_state import checkpoints
+    checkpoints.create(connection, checkfirst=True)
+
+
 # Append revisions here. The recorded sequence is part of the database format.
-MIGRATIONS = ((1, _baseline), (2, _agent_inputs_and_outputs), (3, _provider_catalog))
+MIGRATIONS = ((1, _baseline), (2, _agent_inputs_and_outputs), (3, _provider_catalog), (4, _conversation_state))
 
 
 def apply_migrations(connection):

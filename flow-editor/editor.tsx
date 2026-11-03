@@ -12,6 +12,7 @@ import { AgentOutput } from "./agent-output";
 import { SelectionEditor } from "./chat-input";
 import { RunView } from "./run-view";
 import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
+import { StateCard, StateInspector, newState } from "./state";
 import { WireSettings } from "./wires";
 import { allowsConnection, graphDocument, hydrateGraph, nameExistingWires, nextWireName, ports, switchFieldGraph,
   withEndpoints, type Agent, type ApiInput, type FlowItem, type GenericItem, type JsonItem, type PanelSize,
@@ -92,11 +93,12 @@ function ApiResponseCard() {
   </div>;
 }
 
-const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard };
+const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, state: StateCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard };
 const palette = [
   { type: "agent", title: "Agent" },
   { type: "json", title: "JSON" },
   { type: "switch", title: "Switch" },
+  { type: "state", title: "State" },
   { type: "item", title: "Generic item" },
 ] as const;
 const edgeOptions = { markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 2 } };
@@ -112,7 +114,7 @@ function Editor() {
   const [flowName, setFlowName] = useState(draft.data?.name ?? "");
   const [lastSaved, setLastSaved] = useState(draft.data?.lastSaved ?? "");
   const [savedFlows, setSavedFlows] = useState<FlowSummary[]>([]);
-  const [openFlowId, setOpenFlowId] = useState("");
+  const [openFlowId, setOpenFlowId] = useState(requestedFlow ?? draft.data?.flowId ?? "");
   const [flowStatus, setFlowStatus] = useState("");
   const [runDesign, setRunDesign] = useState<SavedFlow>();
   const [savingFlow, setSavingFlow] = useState(false);
@@ -137,12 +139,13 @@ function Editor() {
   const sources = items.filter(item => item.id !== selected?.id).flatMap(item => {
     if (item.type === "switch") return ports(item.data).map(p => ({ source: item.id, sourceHandle: p.id as string | null,
       label: item.data.label + " · " + p.label }));
-    if (item.type === "agent" || item.type === "json" || (selected?.type !== "apiResponse" && item.type === "apiInput"))
+    if (item.type === "agent" || item.type === "json" || item.type === "state" || (selected?.type !== "apiResponse" && item.type === "apiInput"))
       return [{ source: item.id, sourceHandle: null, label: item.data.label }];
     return [];
   });
   const inputEdges = edges.filter(edge => edge.target === selected?.id);
-  const invalidBase = items.find(node => node.type === "json" && node.data.baseError);
+  const invalidBase = items.find(node => (node.type === "json" && node.data.baseError) ||
+    (node.type === "state" && (node.data.initialError || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(node.data.stateDefinition.key))));
   const maximumPanelSize = stacked
     ? Math.max(0, gridSize.height - 130)
     : Math.max(0, gridSize.width - 250);
@@ -231,7 +234,9 @@ function Editor() {
       setFlowName(saved.name);
       setLastSaved(JSON.stringify(payload));
       setSavedFlows(current => [...current.filter(flow => flow.id !== saved.id), saved]);
+      setOpenFlowId(saved.id);
       const url = new URL(location.href);
+      url.searchParams.delete("new");
       url.searchParams.set("id", saved.id);
       history.replaceState(history.state, "", url.pathname + url.search);
       renderBreadcrumbs();
@@ -338,6 +343,8 @@ function Editor() {
       item = { ...common, type: "agent", data: { label: "Unconfigured agent", definition: null } };
     } else if (entry.type === "json") {
       item = { ...common, type: "json", data: { label: `JSON ${nextNumber.current++}`, objectDefinition: { base: {}, mappings: [] } } };
+    } else if (entry.type === "state") {
+      item = { ...common, type: "state", data: { label: `State ${nextNumber.current++}`, stateDefinition: newState() } };
     } else if (entry.type === "switch") {
       item = { ...common, type: "switch", data: { label: `Switch ${nextNumber.current++}`, switchDefinition: newSwitch() } };
     } else {
@@ -372,9 +379,9 @@ function Editor() {
         </select>
         <button type="button" disabled={!openFlowId}
           onClick={() => location.assign("/admin/flow/?id=" + openFlowId)}>Open flow</button>
-        <a href="/admin/flow/">New flow</a>
+        <a href="/admin/flow/?new=1">New flow</a>
       </div>
-      <p className="flow-save-status" role="status">{invalidBase ? `Fix the base object in ${invalidBase.data.label} to save.` : loadingFlow ? flowStatus || "Loading flow…" : flowStatus}</p>
+      <p className="flow-save-status" role="status">{invalidBase ? `Fix the ${invalidBase.type === "state" ? "key or initial object" : "base object"} in ${invalidBase.data.label} to save.` : loadingFlow ? flowStatus || "Loading flow…" : flowStatus}</p>
       </div>
       <div className="flow-item-tools" role="group" aria-label="Add flow items">
         <label htmlFor="flow-type">Item type</label>
@@ -504,6 +511,7 @@ function Editor() {
               }
             }} />
           </>}
+          {selected.type === "state" && <StateInspector data={selected.data} change={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "switch" && <SwitchInspector key={selected.id} node={selected}
             graphBody={JSON.stringify(switchFieldGraph(selected.id, items, edges))}
             catalogVersion={JSON.stringify(catalog.agents.map(a => [a.id, a.revision]))}
@@ -518,9 +526,10 @@ function Editor() {
               const chatInput = source?.type === "apiInput" && source.data.chatInput;
               const base = chatInput ? { message: "Hello", history: [{ role: "user", content: "Earlier message" }] }
                 : fields ? sampleObject(fields)
-                : source?.type === "json" ? source.data.objectDefinition?.base : undefined;
+                : source?.type === "json" ? source.data.objectDefinition?.base
+                : source?.type === "state" ? source.data.stateDefinition.initial : undefined;
               return { id: edge.id, name: edge.name!, readAs: edge.readAs, label: source?.data.label ?? "Input",
-                structured: Boolean(chatInput || fields) || source?.type === "json", base };
+                structured: Boolean(chatInput || fields) || source?.type === "json" || source?.type === "state", base };
             })}
             onChange={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "agent" && selected.data.definition && <>
@@ -561,7 +570,7 @@ function Editor() {
                   onClick={() => setEdges(current => current.filter(other => other.id !== edge.id))}>Disconnect</button>
               </div>;
             })}
-            {(selected.type !== "switch" || inputEdges.length === 0) && <>
+            {(!["switch", "state"].includes(selected.type!) || inputEdges.length === 0) && <>
             <label htmlFor="input-source">Add input</label>
             <select id="input-source" value="" onChange={event => {
               const [source, sourceHandle] = JSON.parse(event.target.value);

@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from agent_store import AgentDefinition, Name, PromptReference, execution_agents, metadata
 from chat_input import ChatRequest, InputSelection
 from flow_switch import SwitchDefinition
+from flow_state import StateDefinition
 from json_mapping import MappingError, ObjectDefinition, check_size
 
 flows = Table(
@@ -48,16 +49,19 @@ class NodeData(BaseModel):
     definition: AgentReference | None = None
     objectDefinition: ObjectDefinition | None = None
     switchDefinition: SwitchDefinition | None = None
+    stateDefinition: StateDefinition | None = None
 
 
 class FlowNode(BaseModel):
     id: str = Field(min_length=1, max_length=80)
-    type: Literal["apiInput", "apiResponse", "agent", "json", "item", "switch"]
+    type: Literal["apiInput", "apiResponse", "agent", "json", "item", "switch", "state"]
     position: Position
     data: NodeData
 
     @model_validator(mode="after")
     def validate_input_options(self):
+        if (self.type == "state") != (self.data.stateDefinition is not None):
+            raise ValueError("A State element requires its own State definition.")
         if self.data.chatInput and self.type != "apiInput":
             raise ValueError("Chat request format belongs to API Input.")
         if self.data.inputSelection and self.type != "agent":
@@ -124,7 +128,7 @@ class FlowGraph(BaseModel):
         seen = set()
         ids = set()
         names = set()
-        switch_inputs = set()
+        single_inputs = set()
         for edge in self.edges:
             if edge.name:
                 key = (edge.target, edge.name)
@@ -136,8 +140,8 @@ class FlowGraph(BaseModel):
             source, target = nodes[edge.source], nodes[edge.target]
             if edge.readAs == "json" and target.type != "json":
                 raise ValueError("Read as JSON applies to a JSON node's incoming wires")
-            allowed = source.type in ("apiInput", "agent", "json", "switch") and target.type in ("agent", "json", "switch")
-            allowed = allowed or (source.type in ("agent", "json", "switch") and target.type == "apiResponse")
+            allowed = source.type in ("apiInput", "agent", "json", "switch", "state") and target.type in ("agent", "json", "switch", "state")
+            allowed = allowed or (source.type in ("agent", "json", "switch", "state") and target.type == "apiResponse")
             if not allowed:
                 raise ValueError("This connection is not supported")
             if source.type == "switch":
@@ -146,10 +150,10 @@ class FlowGraph(BaseModel):
                     raise ValueError("Select an existing Switch path for this wire.")
             elif edge.sourceHandle is not None:
                 raise ValueError("Only Switch outputs have named ports.")
-            if target.type == "switch":
-                if target.id in switch_inputs:
-                    raise ValueError("A Switch accepts one input.")
-                switch_inputs.add(target.id)
+            if target.type in ("switch", "state"):
+                if target.id in single_inputs:
+                    raise ValueError(f"A {target.type.title()} accepts one input.")
+                single_inputs.add(target.id)
             connection = (source.id, edge.sourceHandle, target.id)
             if edge.id in ids or connection in seen:
                 raise ValueError("Duplicate connection")

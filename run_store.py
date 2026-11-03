@@ -56,8 +56,10 @@ class Run:
         with self.engine.begin() as conn:
             self._append(conn, kind, data)
 
-    def finish(self, status, result=None, error=None):
+    def finish(self, status, result=None, error=None, turn=None):
         with self.engine.begin() as conn:
+            if turn is not None:
+                turn.commit(conn, self.id)
             if error and self.node:
                 self._append(conn, "node.failed", {"error": error})
             self.node = None

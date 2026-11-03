@@ -101,6 +101,8 @@ class FlowFields:
 
     def _resolve(self, node):
         parents = self.incoming[node.id]
+        if node.type == "state":
+            return dict(text_fields(node.data.stateDefinition.initial))
         if node.type == "switch" and len(parents) == 1:
             return self.output(parents[0].source)
         if node.type == "apiInput":

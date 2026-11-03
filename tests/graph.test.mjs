@@ -6,6 +6,22 @@ import { allowsConnection, graphDocument, hydrateGraph } from "../flow-editor/gr
 const snapshot = JSON.parse(readFileSync(new URL("./fixtures/router-snapshot.json", import.meta.url)));
 const catalog = Object.values(snapshot.agents);
 
+test("State round-trips and accepts one incoming wire", () => {
+  const state = { id: "context", type: "state", position: {x: 3, y: 4}, data: {label: "Context",
+    stateDefinition: {scope: "conversation", key: "context", operation: "update", initial: {goal: ""}}} };
+  const graph = {...snapshot.graph, nodes: [...snapshot.graph.nodes, state]};
+  const {nodes, wires} = hydrateGraph(graph, catalog);
+  const saved = graphDocument(nodes, wires, graph.viewport, graph.panelSize);
+  assert.deepEqual(saved.nodes.at(-1)?.type, "apiResponse");
+  assert.deepEqual(saved.nodes.find(n => n.id === state.id).data.stateDefinition, state.data.stateDefinition);
+  const input = {id: "trigger", source: "api-input", target: state.id};
+  assert.equal(allowsConnection(nodes, wires, input), true);
+  assert.equal(allowsConnection(nodes, [...wires, input], {...input, source: state.id}), false);
+  const agent = nodes.find(n => n.type === "agent");
+  assert.equal(allowsConnection(nodes, [...wires, input], {...input, source: agent.id}), false);
+  assert.equal(allowsConnection(nodes, wires, {source: state.id, target: "api-response"}), true);
+});
+
 test("chat input and per-node history selection survive reopening a saved flow", () => {
   const graph = structuredClone(snapshot.graph);
   graph.nodes.find(n => n.type === "apiInput").data.chatInput = true;

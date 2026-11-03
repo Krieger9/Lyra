@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import httpx
+from fastapi import Request
 from prompt_studio import PromptLibrary, SQLAlchemyStorage
 from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
@@ -176,6 +177,61 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "api-response", "type": "apiResponse", "position": {"x": 700, "y": 100}, "data": {"label": "API Response"}},
             ], "edges": [],
         }
+
+    async def test_conversation_state_across_turns_retries_and_debug_runs(self):
+        graph = self.flow_graph()
+        state = {"scope": "conversation", "key": "context", "operation": "read", "initial": {"last": "initial"}}
+        graph["nodes"] += [
+            {"id": "read", "type": "state", "position": {"x": 1, "y": 1},
+             "data": {"label": "Read", "stateDefinition": state}},
+            {"id": "next", "type": "json", "position": {"x": 2, "y": 1},
+             "data": {"label": "Next", "objectDefinition": {"base": {"last": "", "previous": ""},
+                 "mappings": [{"edgeId": "msg", "source": ".value", "target": "/last"},
+                              {"edgeId": "before", "source": ".value/last", "target": "/previous"}]}}},
+            {"id": "write", "type": "state", "position": {"x": 3, "y": 1},
+             "data": {"label": "Write", "stateDefinition": state | {"operation": "replace"}}},
+        ]
+        graph["edges"] = [{"id": key, "source": source, "target": target} for key, source, target in [
+            ("start", "api-input", "read"), ("before", "read", "next"), ("msg", "api-input", "next"),
+            ("after", "next", "write"), ("done", "write", "api-response")]]
+        saved = await self.client.post("/api/admin/flows", json={"name": "Context", "graph": graph})
+        self.assertEqual(saved.status_code, 201, saved.text)
+        flow = saved.json()["id"]
+        bound = await self.client.put("/api/admin/chat-flow/" + flow, json={"revision": 1})
+        self.assertEqual(bound.status_code, 200, bound.text)
+        conversation = str(uuid4())
+        owner = "one"
+
+        def authenticate(request: Request):
+            request.state.chat_owner = owner
+            return ["User.Chat"]
+
+        async def send(message, turn=None):
+            return await self.client.post("/api/chat", json={"message": message}, headers={
+                "X-Lyra-Conversation-Id": conversation, "X-Lyra-Turn-Id": turn or str(uuid4())})
+
+        with patch.dict(app.dependency_overrides, {require_chat_access: authenticate}):
+            first_turn = str(uuid4())
+            first = await send("first", first_turn)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(first.json()["reply"], {"last": "first", "previous": "initial"})
+            debug = await self.client.post(f"/api/admin/flows/{flow}/run", json={"input": "debug"})
+            self.assertEqual(debug.json()["previous"], "initial")
+            self.assertEqual((await send("second")).json()["reply"]["previous"], "first")
+            replay = await send("first", first_turn)
+            self.assertEqual(replay.headers["X-Lyra-Run-Id"], first.headers["X-Lyra-Run-Id"])
+            self.assertEqual((await send("changed", first_turn)).status_code, 409)
+            from json_mapping import MappingError
+            with patch("conversation_state.ConversationTurn.commit", side_effect=MappingError("State too large")):
+                failed = await send("uncommitted")
+                self.assertEqual(failed.status_code, 422)
+                failed_run = await self.client.get("/api/admin/runs/" + failed.headers["X-Lyra-Run-Id"])
+                self.assertEqual(failed_run.json()["status"], "failed")
+            self.assertEqual((await send("third")).json()["reply"]["previous"], "second")
+            owner = "two"
+            self.assertEqual((await send("other user")).json()["reply"]["previous"], "initial")
+            owner, conversation = "one", str(uuid4())
+            self.assertEqual((await send("new chat")).json()["reply"]["previous"], "initial")
 
     async def test_provider_model_selection_for_agent_test_flow_and_pinned_chat(self):
         mids = [(await self.client.post("/api/admin/models", json={"name": name})).json()["id"]

@@ -32,6 +32,8 @@ def plan_flow(graph, agents, observe=None):
     plan, visiting, completed = [], set(), {"api-input"}
     fields = FlowFields(nodes, incoming, agents)
     required_paths = {"api-input": {}}
+    ancestors = {"api-input": set()}
+    state_accesses = {}
 
     def visit(node_id):
         if observe:
@@ -60,7 +62,24 @@ def plan_flow(graph, agents, observe=None):
                 raise HTTPException(422, "Each connected Switch needs one input and a Switch definition.")
             node.data.switchDefinition.validate_fields(fields.output(parents[0].source))
         required_paths[node_id] = path_requirements(node, parents, required_paths)
-        if node.type in ("agent", "json", "switch"):
+        ancestors[node_id] = {edge.source for edge in parents}
+        for edge in parents:
+            ancestors[node_id].update(ancestors[edge.source])
+        if node.type == "state" and len(parents) != 1:
+            raise HTTPException(422, "Each connected State requires one input.")
+        if node.type == "state":
+            definition = node.data.stateDefinition
+            accesses = state_accesses.setdefault((definition.scope, definition.key), [])
+            for other in accesses:
+                guard = required_paths[other.id]
+                exclusive = any(path in guard and guard[path] != port for path, port in required_paths[node_id].items())
+                if other.id in ancestors[node_id] or exclusive:
+                    continue
+                previous = other.data.stateDefinition
+                if (definition.operation, previous.operation) != ("read", "read") or definition.initial != previous.initial:
+                    raise HTTPException(422, f"Connect the State accesses for '{definition.key}' in execution order.")
+            accesses.append(node)
+        if node.type in ("agent", "json", "switch", "state"):
             plan.append(node)
         visiting.remove(node_id)
         completed.add(node_id)
@@ -71,8 +90,9 @@ def plan_flow(graph, agents, observe=None):
     return plan, incoming
 
 
-async def execute(graph, agents, library, studio, value, run, chat_context=None):
+async def execute(graph, agents, library, studio, value, run, chat_context=None, conversation_state=None):
     plan, incoming = plan_flow(graph, agents, run)
+    state = {"run": {}, "conversation": conversation_state if conversation_state is not None else {}}
     run.node = None
     run.emit("plan.ready", order=["api-input", *[n.id for n in plan], "api-response"])
     outputs = {}
@@ -103,6 +123,9 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None)
             output = inputs[parents[0].id] if parents else ""
         elif node.type == "json":
             output = assemble(node.data.objectDefinition, inputs, {e.id: e.readAs for e in parents}, run.emit)
+        elif node.type == "state":
+            definition = node.data.stateDefinition
+            output = definition.apply(state[definition.scope], inputs[parents[0].id])
         elif node.type == "switch":
             output = inputs[parents[0].id]
             path_id, label = node.data.switchDefinition.select(output)
@@ -119,11 +142,14 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None)
     return outputs["api-response"]
 
 
-async def perform(document: FlowSnapshot, library, studio, value, run, chat_context=None):
+async def perform(document: FlowSnapshot, library, studio, value, run, chat_context=None, turn=None):
     run.emit("run.started", input=value)
     try:
         result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio,
-                                                value, run, chat_context), RUN_TIMEOUT)
+                                                value, run, chat_context, turn.objects if turn else None), RUN_TIMEOUT)
+        if turn and not isinstance(result, (str, dict)):
+            raise MappingError("Chat requires a text or object response.")
+        run.finish("completed", result=result, turn=turn)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)
         raise
@@ -140,7 +166,6 @@ async def perform(document: FlowSnapshot, library, studio, value, run, chat_cont
         logging.getLogger(__name__).error("Flow run %s failed (%s)", run.id, type(exc).__name__)
         run.finish("failed", error=f"Execution failed ({type(exc).__name__}).")
         raise HTTPException(503, "Flow execution failed. Check the model and database.") from exc
-    run.finish("completed", result=result)
     return result
 
 

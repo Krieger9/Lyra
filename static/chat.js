@@ -6,6 +6,8 @@ const messages = document.querySelector("#messages");
 const welcome = document.querySelector("#welcome");
 const statusLine = document.querySelector("#status");
 let history = [];
+let conversationId = crypto.randomUUID();
+let pendingTurn;
 let busy = false;
 let client;
 let scopes;
@@ -150,6 +152,8 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 
 reset.addEventListener("click", () => {
   history = [];
+  conversationId = crypto.randomUUID();
+  pendingTurn = undefined;
   messages.replaceChildren();
   welcome.hidden = false;
   draft.value = "";
@@ -167,6 +171,7 @@ form.addEventListener("submit", async (event) => {
     return;
   }
   busy = true;
+  if (pendingTurn?.message !== message) pendingTurn = { message, id: crypto.randomUUID() };
   welcome.hidden = true;
   draft.value = "";
   updateControls();
@@ -177,7 +182,8 @@ form.addEventListener("submit", async (event) => {
     const token = await client.acquireTokenSilent({ scopes, account });
     const response = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token.accessToken },
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token.accessToken,
+        "X-Lyra-Conversation-Id": conversationId, "X-Lyra-Turn-Id": pendingTurn.id },
       body: JSON.stringify({ message, history }),
     });
     const data = await response.json();
@@ -199,6 +205,7 @@ form.addEventListener("submit", async (event) => {
     history.push({ role: "user", content: message });
     if (reply.trim()) history.push({ role: "assistant", content: reply.slice(0, 8000) });
     history = history.slice(-12);
+    pendingTurn = undefined;
     statusLine.textContent = "";
   } catch (error) {
     pending.remove();

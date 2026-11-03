@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 
@@ -61,6 +61,9 @@ class EntraAuth:
             raise HTTPException(503, "Configure a distinct ENTRA_ADMIN_SCOPE and permitted admin roles.")
 
     def authorize(self, token: str, *, admin: bool = False, mcp: bool = False):
+        return self.authorized_claims(token, admin=admin, mcp=mcp)["roles"]
+
+    def authorized_claims(self, token: str, *, admin: bool = False, mcp: bool = False):
         if admin:
             self.check_admin_config()
         try:
@@ -92,7 +95,7 @@ class EntraAuth:
         allowed_roles = self.admin_roles if admin else self.roles
         if not isinstance(roles, list) or not any(role in roles for role in allowed_roles):
             raise HTTPException(403, "Your account does not have an assigned role for this area.")
-        return roles
+        return claims
 
 
 @lru_cache(maxsize=1)
@@ -103,10 +106,12 @@ def settings() -> EntraAuth:
         raise HTTPException(503, "Complete the Entra settings in .env and restart Lyra.") from exc
 
 
-def require_chat_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+def require_chat_access(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
     if credentials is None:
         raise HTTPException(401, "Sign in to use chat.", headers={"WWW-Authenticate": "Bearer"})
-    return settings().authorize(credentials.credentials)
+    claims = settings().authorized_claims(credentials.credentials)
+    request.state.chat_owner = claims["tid"] + "/" + claims["sub"]
+    return claims["roles"]
 
 
 def require_admin_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):

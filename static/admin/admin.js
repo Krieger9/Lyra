@@ -90,11 +90,24 @@ async function loadHome() {
     const { mountConfiguration } = await import(assetUrl("/admin/configuration.js"));
     await mountConfiguration(page);
   }
+  let flowLookupError;
   if (page === "flow") {
     const stylesheet = document.createElement("link");
     stylesheet.rel = "stylesheet";
     stylesheet.href = assetUrl("/admin/flow-assets/editor.css");
     document.head.append(stylesheet);
+    const url = new URL(location.href);
+    if (!["id", "run", "draft", "new"].some(key => url.searchParams.has(key))) {
+      try {
+        const binding = await window.lyraAdminRequest("/api/admin/chat-flow");
+        if (binding) {
+          url.searchParams.set("id", binding.id);
+          history.replaceState(history.state, "", url);
+        }
+      } catch (error) {
+        flowLookupError = "Could not select the chat flow. " + error.message;
+      }
+    }
     await import(assetUrl("/admin/flow-assets/editor.js"));
   }
   if (["models", "model-groups", "protocols", "providers"].includes(page)) {
@@ -111,7 +124,7 @@ async function loadHome() {
     agents: "Define reusable agents using instructions and prompts from PromptStudio.",
     prompts: "Manage the versioned Lyra prompt library.",
   };
-  statusLine.textContent = descriptions[page];
+  statusLine.textContent = flowLookupError || descriptions[page];
 }
 
 async function initialize() {

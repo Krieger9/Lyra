@@ -77,6 +77,14 @@ Fields can also be objects or arrays. For a transcript, add an array field named
 
 A JSON node can copy the array with `{{ result.history }}`, a turn with `{{ result.history[0] }}`, or its text with `{{ result.history[0].content }}` when the incoming wire is named `result`. An indexed mapping requires that element to exist.
 
+### Share a JSON object with State
+
+In Flow View, add **State** and choose a key, scope, operation, and initial JSON object. Place another State with the same key and scope to access that object elsewhere. Each State takes one incoming wire and outputs the current object. **Read** uses the wire as a trigger. **Update fields** overwrites the supplied top-level fields and keeps the others. **Replace object** takes the entire incoming object. Use a JSON element upstream to map a message or an Agent result into fields. Wire accesses to the same key in execution order whenever either placement writes.
+
+For rolling context, connect API Input to a State read, pass its output and the current message into a JSON element, and feed that object to your answering Agent. An update branch can combine the message and the final reply, then send the resulting object to a State write. The final reply can also feed API Response directly.
+
+**This run** starts fresh each time. **This conversation** commits after a successful chat turn and is private to the signed-in user, Flow, library, and conversation. The chat page starts a new conversation on reset or reload. Debug and synchronous admin runs use temporary State. Custom chat clients using conversation State must send UUID headers `X-Lyra-Conversation-Id` and `X-Lyra-Turn-Id`. Keep the first stable across the conversation and reuse the second only when retrying the same request.
+
 ### Select chat input for a flow agent
 
 In Flow View, choose **Agent input** on the agent node. For chat selections, **Chat source** controls where the message and prior turns come from.

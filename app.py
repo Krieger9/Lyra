@@ -4,12 +4,13 @@ from hashlib import sha256
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from agent_studio import (
     AgentStudio, Endpoint, PostgresTraceAdapter, Model, ModelGroup,
     PromptStudioAdapter, Protocol,
 )
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -28,6 +29,7 @@ from run_api import router as run_router
 from run_mcp import install_mcp
 from model_adapter import MeteredOllamaAdapter
 from chat_input import ChatRequest
+from conversation_state import open_turn
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -164,17 +166,29 @@ def msal_bridge():
 
 
 @app.post("/api/chat", response_model=ChatReply, dependencies=[Depends(require_chat_access)])
-async def chat(body: ChatRequest, request: Request, response: Response):
+async def chat(body: ChatRequest, request: Request, response: Response,
+               x_lyra_conversation_id: UUID | None = Header(None), x_lyra_turn_id: UUID | None = Header(None)):
     studio = request.app.state.studio
     library = request.app.state.library
     document = activation(library)
     if document:
+        turn = None
+        if any(n.type == "state" and n.data.stateDefinition.scope == "conversation" for n in document.graph.nodes):
+            if not x_lyra_conversation_id or not x_lyra_turn_id:
+                raise HTTPException(422, "This Flow requires X-Lyra-Conversation-Id and X-Lyra-Turn-Id.")
+            turn, replay = open_turn(library, request.state.chat_owner, document.id,
+                                     x_lyra_conversation_id, x_lyra_turn_id, body)
+            if replay:
+                run_id, reply = replay
+                response.headers["X-Lyra-Run-Id"] = str(run_id)
+                response.headers["X-Lyra-Flow-Id"] = str(document.id)
+                return ChatReply(reply=reply)
         run = Run(library, document, "chat")
         response.headers["X-Lyra-Run-Id"] = str(run.id)
         response.headers["X-Lyra-Flow-Id"] = str(document.id)
         try:
             value = body.model_dump() if document.graph.chat_input else body.message
-            reply = await perform(document, library, studio, value, run, body)
+            reply = await perform(document, library, studio, value, run, body, turn)
         except HTTPException as exc:
             raise HTTPException(exc.status_code, "Chat flow failed. An administrator can inspect the run.",
                                 headers={"X-Lyra-Run-Id": str(run.id), "X-Lyra-Flow-Id": str(document.id)}) from exc

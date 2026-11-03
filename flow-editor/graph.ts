@@ -2,6 +2,7 @@ import type { Connection, Edge, Node, Viewport } from "@xyflow/react";
 import type { AgentDefinition } from "./catalog";
 import type { JsonNodeData } from "./json-mapping";
 import type { SwitchItem } from "./switch";
+import type { StateItem } from "./state";
 import type { InputSelection } from "./chat-input";
 
 export type GenericItem = Node<{ label: string }, "item">;
@@ -9,7 +10,7 @@ export type JsonItem = Node<JsonNodeData, "json">;
 export type ApiInput = Node<{ label: string; chatInput?: boolean }, "apiInput">;
 export type ApiResponse = Node<{ label: string }, "apiResponse">;
 export type Agent = Node<{ label: string; definition: AgentDefinition | null; inputSelection?: InputSelection | null }, "agent">;
-export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent | SwitchItem;
+export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent | SwitchItem | StateItem;
 export type PanelSize = { width: number; height: number };
 type SavedNode = Exclude<FlowItem, Agent> | Node<Omit<Agent["data"], "definition"> & { definition: { id: string } | null }, "agent">;
 export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize };
@@ -49,6 +50,7 @@ export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewpo
         ...(node.type === "apiInput" && node.data.chatInput ? { chatInput: true } : {}),
         ...(node.type === "agent" && node.data.inputSelection ? { inputSelection: node.data.inputSelection } : {}),
         ...(node.type === "json" ? { objectDefinition: node.data.objectDefinition ?? null } : {}),
+        ...(node.type === "state" ? { stateDefinition: node.data.stateDefinition } : {}),
         ...(node.type === "switch" ? { switchDefinition: node.data.switchDefinition } : {}) },
     })),
     edges: edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, name: edge.name,
@@ -109,11 +111,11 @@ export function allowsConnection(items: FlowItem[], edges: Wire[], connection: C
   const source = items.find(item => item.id === connection.source);
   const target = items.find(item => item.id === connection.target);
   if (!source || !target || source.id === target.id) return false;
-  if (!["apiInput", "agent", "json", "switch"].includes(source.type!)) return false;
+  if (!["apiInput", "agent", "json", "switch", "state"].includes(source.type!)) return false;
   if (source.type === "switch" && !ports(source.data).some(port => port.id === connection.sourceHandle)) return false;
   if (target.type === "apiResponse") {
     if (source.type === "apiInput") return false;
-  } else if (target.type === "switch") {
+  } else if (target.type === "switch" || target.type === "state") {
     if (edges.some(edge => edge.id !== replacedEdgeId && edge.target === target.id)) return false;
   } else if (target.type !== "agent" && target.type !== "json") return false;
   return !edges.some(edge => edge.id !== replacedEdgeId && edge.source === source.id && edge.target === target.id &&
