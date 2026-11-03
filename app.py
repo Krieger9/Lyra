@@ -3,7 +3,7 @@ import os
 from hashlib import sha256
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Literal
 
 from agent_studio import (
     AgentStudio, Endpoint, PostgresTraceAdapter, Model, ModelGroup,
@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from prompt_studio import PromptLibrary, SQLAlchemyStorage
-from pydantic import BaseModel, Field, JsonValue, StringConstraints
+from pydantic import BaseModel, JsonValue
 
 from auth import require_admin_access, require_chat_access, settings
 from agent_definitions import router as definitions_router
@@ -27,6 +27,7 @@ from run_store import Run, activation
 from run_api import router as run_router
 from run_mcp import install_mcp
 from model_adapter import MeteredOllamaAdapter
+from chat_input import ChatRequest
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -38,8 +39,6 @@ TEMPLATE = """You are Lyra, a helpful chat assistant. Answer the user's latest m
 {% endfor %}
 user: {{ request }}
 assistant:"""
-
-MessageText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)]
 
 
 def ui_version():
@@ -57,16 +56,6 @@ class RevalidatingStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-cache"
         return response
-
-
-class Turn(BaseModel):
-    role: Literal["user", "assistant"]
-    content: MessageText
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=8000, pattern=r"\S")
-    history: list[Turn] = Field(default_factory=list, max_length=12)
 
 
 class ChatReply(BaseModel):
@@ -178,7 +167,8 @@ async def chat(body: ChatRequest, request: Request, response: Response):
         response.headers["X-Lyra-Run-Id"] = str(run.id)
         response.headers["X-Lyra-Flow-Id"] = str(document.id)
         try:
-            reply = await perform(document, library, studio, body.message, run)
+            value = body.model_dump() if document.graph.chat_input else body.message
+            reply = await perform(document, library, studio, value, run, body)
         except HTTPException as exc:
             raise HTTPException(exc.status_code, "Chat flow failed. An administrator can inspect the run.",
                                 headers={"X-Lyra-Run-Id": str(run.id), "X-Lyra-Flow-Id": str(document.id)}) from exc

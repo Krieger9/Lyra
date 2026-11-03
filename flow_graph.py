@@ -9,6 +9,7 @@ from sqlalchemy import Column, DateTime, Integer, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import JSONB
 
 from agent_store import AgentDefinition, Name, PromptReference, execution_agents, metadata
+from chat_input import ChatRequest, InputSelection
 from flow_switch import SwitchDefinition
 from json_mapping import MappingError, ObjectDefinition, check_size
 
@@ -42,6 +43,8 @@ class AgentReference(BaseModel):
 
 class NodeData(BaseModel):
     label: str = Field(default="", max_length=120)
+    chatInput: bool = False
+    inputSelection: InputSelection | None = None
     definition: AgentReference | None = None
     objectDefinition: ObjectDefinition | None = None
     switchDefinition: SwitchDefinition | None = None
@@ -52,6 +55,14 @@ class FlowNode(BaseModel):
     type: Literal["apiInput", "apiResponse", "agent", "json", "item", "switch"]
     position: Position
     data: NodeData
+
+    @model_validator(mode="after")
+    def validate_input_options(self):
+        if self.data.chatInput and self.type != "apiInput":
+            raise ValueError("Chat request format belongs to API Input.")
+        if self.data.inputSelection and self.type != "agent":
+            raise ValueError("Input selection belongs to an Agent.")
+        return self
 
 
 class FlowEdge(BaseModel):
@@ -96,6 +107,10 @@ class FlowGraph(BaseModel):
     edges: list[FlowEdge] = Field(default_factory=list, max_length=400)
     viewport: Viewport = Field(default_factory=lambda: Viewport(x=0, y=0, zoom=1))
     panelSize: PanelSize = Field(default_factory=lambda: PanelSize(width=280, height=240))
+
+    @property
+    def chat_input(self):
+        return next(node.data.chatInput for node in self.nodes if node.type == "apiInput")
 
     @model_validator(mode="after")
     def validate_graph(self):
@@ -172,6 +187,7 @@ class FlowUpdate(FlowWrite):
 
 class FlowRun(BaseModel):
     input: str | dict[str, JsonValue] | list[JsonValue] = ""
+    chatContext: ChatRequest | None = None
 
     @field_validator("input")
     @classmethod

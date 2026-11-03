@@ -32,7 +32,7 @@ async def start(flow_id: UUID, body: DebugRun, request: Request, background: Bac
     library = library_for(request)
     document = snapshot(library, flow_id, body.revision)
     run = Run(library, document, "debug")
-    background.add_task(run_in_background, document, library, request.app.state.studio, body.input, run)
+    background.add_task(run_in_background, document, library, request.app.state.studio, body.input, run, body.chatContext)
     return {"id": str(run.id)}
 
 

@@ -95,7 +95,7 @@ async def run_flow(flow_id: UUID, body: FlowRun, request: Request):
     run = Run(library, document, "api")
     headers = {"Cache-Control": "no-store", "X-Lyra-Run-Id": str(run.id)}
     try:
-        output = await perform(document, library, request.app.state.studio, body.input, run)
+        output = await perform(document, library, request.app.state.studio, body.input, run, body.chatContext)
     except HTTPException as exc:
         raise HTTPException(exc.status_code, exc.detail, headers=headers) from exc
     return JSONResponse(output, headers=headers) if not isinstance(output, str) else Response(

@@ -28,6 +28,7 @@ dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .configuration-form button { padding: 9px 14px; }
 #agent-output { margin-top: 24px; }
 #agent-output fieldset { min-width: 0; border: 1px solid var(--line); border-radius: 6px; margin: 12px 0; }
+#agent-output fieldset > div { display: block; }
 #agent-output .output-fields fieldset { padding: 8px 16px 14px; }
 #agent-output label[hidden] { display: none; }
 #agent-output .required-field input { display: inline; width: auto; }

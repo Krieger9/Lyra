@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type { OutputField } from "./catalog";
 import { compileTemplate, renderTemplate, type ObjectDefinition, type Rule, type WireReference } from "./bindings";
 
 type JsonObject = Record<string, unknown>;
@@ -9,7 +8,7 @@ export type JsonNodeData = {
   baseText?: string;
   baseError?: string;
 };
-type Port = WireReference & { label: string; base?: JsonObject; fields?: OutputField[]; structured: boolean; readAs?: "json" | "value" };
+type Port = WireReference & { label: string; base?: JsonObject; structured: boolean; readAs?: "json" | "value" };
 
 // Suggest existing fields, including fields with slashes or tildes in their names.
 function fieldPaths(base: JsonObject) {
@@ -105,6 +104,7 @@ export function JsonMappingInspector({ data, ports, onChange }: {
     <datalist id="json-targets">{targets.map(path => <option key={path} value={path} />)}</datalist>
     {mappings.map((rule, index) => {
       const port = ports.find(port => port.id === rule.edgeId);
+      const sourcePaths = port?.base ? fieldPaths(port.base) : [];
       return <fieldset key={index} disabled={Boolean(data.baseError)}>
         <legend>Mapping {index + 1}</legend>
         <label>Incoming wire<select value={rule.edgeId} onChange={event => changeRule(index, { edgeId: event.target.value })}>
@@ -112,18 +112,18 @@ export function JsonMappingInspector({ data, ports, onChange }: {
           {ports.map(port => <option key={port.id} value={port.id}>{port.name} · {port.label}</option>)}
         </select></label>
         <small>Connection ID <code>{rule.edgeId}</code></small>
-        {port?.fields && <label>Source field<select value={rule.source}
+        {port?.structured && <label>Source field<select value={rule.source}
           onChange={event => changeRule(index, { source: event.target.value })}>
           <option value=".value">Whole object</option>
-          {port.fields.map(field => <option key={field.name} value={".value/" + field.name}>{port.name}.{field.name}</option>)}
-          {rule.source !== ".value" && !port.fields.some(field => rule.source === ".value/" + field.name)
+          {sourcePaths.map(path => <option key={path} value={".value" + path}>{port.name}{path}</option>)}
+          {rule.source !== ".value" && !sourcePaths.some(path => rule.source === ".value" + path)
             && <option value={rule.source}>Custom expression · {rule.source}</option>}
         </select></label>}
         <label>Read expression<input value={rule.source} list={`json-reads-${index}`} spellCheck={false}
           onChange={event => changeRule(index, { source: event.target.value })} /></label>
         <datalist id={`json-reads-${index}`}>
           <option value=".value" /><option value=".text" /><option value=".json" />
-          {port?.base && fieldPaths(port.base).map(path => <option key={path} value={".value" + path} />)}
+          {sourcePaths.map(path => <option key={path} value={".value" + path} />)}
         </datalist>
         <label>Write to field<input value={rule.target} list="json-targets" placeholder="/session/id" spellCheck={false}
           onChange={event => changeRule(index, { target: event.target.value })} /></label>

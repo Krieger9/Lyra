@@ -8,6 +8,30 @@ from model_adapter import provider_model
 
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selected_turns_reach_each_provider_in_order(self):
+        messages = [{"role": "system", "content": "Follow the instructions."},
+                    {"role": "assistant", "content": "Earlier reply"},
+                    {"role": "user", "content": "Continue"}]
+        for provider in ("ollama", "openai", "anthropic"):
+            with self.subTest(provider=provider):
+                body = {}
+
+                async def respond(transport, request):
+                    body.update(json.loads(request.content))
+                    responses = {"ollama": {"model": "sample", "message": {"role": "assistant", "content": "ok"}, "done": True},
+                                 "openai": {"choices": [{"message": {"content": "ok"}}]},
+                                 "anthropic": {"content": [{"type": "text", "text": "ok"}]}}
+                    return httpx.Response(200, json=responses[provider])
+
+                model = provider_model({"uri": "http://localhost:11434", "adapter": provider, "models": ["sample"]}, "sample")
+                with patch.object(httpx.AsyncHTTPTransport, "handle_async_request", respond):
+                    self.assertEqual(await model.complete(messages), "ok")
+                expected = messages
+                if provider == "anthropic":
+                    self.assertEqual(body["system"], messages[0]["content"])
+                    expected = messages[1:]
+                self.assertEqual([{k: turn[k] for k in ("role", "content")} for turn in body["messages"]], expected)
+
     async def test_observed_ollama_call_preserves_the_wire_exchange(self):
         model = provider_model({"uri": "http://localhost:11434", "models": ["local"]}, "local")
         events = []

@@ -146,7 +146,7 @@ def agent_values(body, library):
         "instructions_name": instructions.name, "instructions_version": instructions.version,
         "prompt_name": body.prompt.name if body.prompt else None,
         "prompt_version": body.prompt.version if body.prompt else None,
-        "output_schema": body.outputSchema.model_dump() if body.outputSchema else None,
+        "output_schema": body.outputSchema.model_dump(exclude_none=True) if body.outputSchema else None,
         "provider_id": body.modelSelection.providerId if body.modelSelection else None,
         "model_name": body.modelSelection.model if body.modelSelection else None,
         "updated_at": datetime.now(timezone.utc),

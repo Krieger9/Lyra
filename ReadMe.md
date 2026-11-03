@@ -73,6 +73,27 @@ Use **Agents** in the left navigation to list, create and edit reusable definiti
 
 Under **Output**, select **Structured object** and add required or optional fields. For **User Input Classifier**, use a required single-choice field named `category` with `conversation` and `intelligence` on separate lines, and a required text field named `explanation` with a description asking for the reason. Save the definition. In Flow View, select the agent and open **Test agent** to run a sample against the saved definition and inspect the validated output.
 
+Fields can also be objects or arrays. For a transcript, add an array field named `history`, set its item type to **Object**, and add a required `role` choice and a required `content` text field. Give `role` the choices `user` and `assistant`. An empty array represents no prior turns. The agent prompt and the runtime validator use the same definition. If the second turn has an invalid role, the run identifies `history[1].role`.
+
+A JSON node can copy the array with `{{ result.history }}`, a turn with `{{ result.history[0] }}`, or its text with `{{ result.history[0].content }}` when the incoming wire is named `result`. An indexed mapping requires that element to exist.
+
+### Select chat input for a flow agent
+
+In Flow View, choose **Agent input** on the agent node. For chat selections, **Chat source** controls where the message and prior turns come from.
+
+| Selection | What the agent receives |
+| --- | --- |
+| Whole wire value (default) | The incoming string, or the entire incoming JSON value serialized as text. |
+| Current message only | The current message, rendered with the agent’s optional prompt template. |
+| Current message + recent turns | The last 1–12 prior messages in chronological order, followed by the rendered current message. |
+| Current message + all available turns | Every supplied prior message in chronological order, followed by the rendered current message. |
+
+Choose **Original chat request** when a routing node forwards a classification or another object. The wire still determines whether the agent runs. The current message and selected history come from the chat request that started this run, regardless of the API Input format. The agent’s prompt template can also use the routed value, for example `{{ wire.request.category }}` alongside `{{ request }}`.
+
+Choose **Incoming wire** to read a chat request supplied by an upstream node. A plain string supplies a current message with empty history. To put the original chat request on outgoing wires, choose **API Input → Input format → Chat request with history**. A turn is one prior user or assistant message. Selected turns keep their roles at the provider.
+
+Use **Test agent** to try the selection or **Run flow** to supply sample prior turns. Debug and synchronous run APIs accept `chatContext` separately from the graph input, for example `{"input":"Which color?","chatContext":{"message":"Which color?","history":[{"role":"user","content":"I picked turquoise."}]}}`. With the chat API Input format, `input` itself can supply the original chat request. Run View shows the wire value, the selected source, the prior turn count and the provider request.
+
 On startup Lyra seeds `Instructions.default` with `You are a helpful agent` if its first version is absent. This is a normal PromptStudio entry, and edits publish new versions. New agents default to its latest version. Agents retain their selected instruction and template versions until explicitly edited. Requests that omit instructions use the latest default, and requests that omit the prompt use raw input. The startup schema update allows existing definitions to use raw input while retaining their template references.
 
 The editor previews selected library text and links to **PromptStudio** to create new prompts or publish revisions. Saving a prompt opened from an agent field returns to that agent form with the new version selected in that field. Saving from the standalone PromptStudio list returns to the list. Creating or editing an agent from a flow item returns to that flow and assigns the saved definition to the originating item.
@@ -129,7 +150,7 @@ Open [Lyra Chat](http://localhost:8765/). Signed-out visitors go directly to Mic
 
 Open a saved flow and choose **Run flow** (or **Save and run** for a draft). Enter raw input and run the displayed revision. The design stays in its editor while a read-only diagram shows the selected execution. Select a node to see the values on its incoming wires, its output, elapsed times and detailed events. The recent-runs selector includes API, debugger and chat executions. **Export run JSON** includes the captured graph and agent definitions.
 
-Under **Chat connection**, **Use this revision in Lyra chat** pins the graph and resolved agent definitions for that library. Later design edits apply to debug runs when saved. To publish changed agents on the same flow revision, disconnect and activate again. Active chat passes the raw message into API Input and displays the API Response body, including structured JSON. Admins can follow **Inspect run** from chat. Disconnecting restores the built-in chat prompt and its history input.
+Under **Chat connection**, **Use this revision in Lyra chat** pins the graph and resolved agent definitions for that library. Later design edits apply to debug runs when saved. To publish changed agents on the same flow revision, disconnect and activate again. Active chat sends the API Input format configured in the pinned revision and displays the API Response body, including structured JSON. Admins can follow **Inspect run** from chat. Disconnecting restores the built-in chat prompt and its history input.
 
 The persisted `FlowSnapshot` contains the flow ID, name, revision, graph, and resolved agents keyed by agent ID. Each selected provider contributes its endpoint, protocol adapter, and permitted models. Agents using the default model resolve it from the running application. At execution, PromptStudio renders the pinned root versions and resolves ungrouped includes to their latest versions. Provider credentials are looked up for the saved API base when the call runs. Historical run inspection reads the original stored JSON. The Python chat test and TypeScript editor tests share `tests/fixtures/router-snapshot.json`, captured from a synthetic PostgreSQL run before the snapshot model was introduced.
 
@@ -154,7 +175,7 @@ Run evidence includes original messages, prompt text and model output. It persis
 
 ## Chat API
 
-`POST /api/chat` accepts a message of up to 8,000 characters and optional history in chronological order. The UI includes the most recent six completed exchanges, with up to 8,000 characters per turn. FastAPI passes the latest message as AgentStudio’s `request` and the earlier turns as the template parameter `history`.
+`POST /api/chat` accepts a message of up to 8,000 characters and optional history in chronological order. The UI includes up to 12 prior messages, with up to 8,000 characters per turn. Built-in chat passes the latest message as AgentStudio’s `request` and the earlier turns as the template parameter `history`.
 
 The [interactive API docs](http://localhost:8765/docs) accept a delegated API access token through **Authorize**. Missing or invalid credentials return HTTP 401. A valid token with insufficient permissions returns HTTP 403.
 

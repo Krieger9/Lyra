@@ -6,9 +6,10 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./editor.css";
-import { loadCatalog, type AgentDefinition, type Catalog, type PromptReference } from "./catalog";
+import { loadCatalog, sampleObject, type AgentDefinition, type Catalog, type PromptReference } from "./catalog";
 import { JsonMappingInspector } from "./json-mapping";
 import { AgentOutput } from "./agent-output";
+import { SelectionEditor } from "./chat-input";
 import { RunView } from "./run-view";
 import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
 import { WireSettings } from "./wires";
@@ -262,7 +263,7 @@ function Editor() {
         setItems(current => current.map(node => {
           if (node.type !== "agent" || !node.data.definition) return node;
           const definition = result.agents.find(agent => agent.id === node.data.definition?.id) ?? null;
-          return { ...node, data: { label: definition?.name ?? "Unconfigured agent", definition } };
+          return { ...node, data: { ...node.data, label: definition?.name ?? "Unconfigured agent", definition } };
         }));
       } catch (error) {
         if (active) {
@@ -454,7 +455,12 @@ function Editor() {
           <p>This endpoint is the required starting point for the flow.</p>
           <h3>Endpoint</h3>
           {flowId ? <code>POST /api/admin/flows/{flowId}/run</code> : <p>Save this flow to create its run endpoint.</p>}
-          <h3>Inputs</h3><p>Incoming API request</p>
+          <label>Input format<select value={selected.data.chatInput ? "chat" : "default"}
+            onChange={e => updateNodeData(selected.id, { chatInput: e.target.value === "chat" })}>
+            <option value="default">As received (current message for chat)</option>
+            <option value="chat">Chat request with history</option>
+          </select></label>
+          {selected.data.chatInput && <p>Outputs <code>message</code> and an ordered <code>history</code> of prior turns.</p>}
         </>}
         {selected?.type === "apiResponse" && <>
           <strong>API Response</strong>
@@ -509,13 +515,17 @@ function Editor() {
             ports={inputEdges.map(edge => {
               const source = items.find(node => node.id === edge.source);
               const fields = source?.type === "agent" ? source.data.definition?.outputSchema?.fields : undefined;
-              const base = fields ? Object.fromEntries(fields.map(field => [field.name, field.choices[0] ?? ""]))
+              const chatInput = source?.type === "apiInput" && source.data.chatInput;
+              const base = chatInput ? { message: "Hello", history: [{ role: "user", content: "Earlier message" }] }
+                : fields ? sampleObject(fields)
                 : source?.type === "json" ? source.data.objectDefinition?.base : undefined;
               return { id: edge.id, name: edge.name!, readAs: edge.readAs, label: source?.data.label ?? "Input",
-                structured: Boolean(fields) || source?.type === "json", fields, base };
+                structured: Boolean(chatInput || fields) || source?.type === "json", base };
             })}
             onChange={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "agent" && selected.data.definition && <>
+            <SelectionEditor selection={selected.data.inputSelection}
+              change={inputSelection => updateNodeData(selected.id, {inputSelection})} />
             <a href={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}`, { node: selected.id })}>Edit agent definition</a>
             <h3>Request model</h3>
             <p>{selected.data.definition.modelSelection
@@ -530,8 +540,9 @@ function Editor() {
               <p>{selected.data.definition.prompt.name} · v{selected.data.definition.prompt.version}</p>
               <pre>{promptText(selected.data.definition.prompt)}</pre>
             </> : <p>Raw user input · Incoming flow text is used directly.</p>}
-            <AgentOutput key={selected.data.definition.id + ":" + selected.data.definition.revision}
+            <AgentOutput key={[selected.id, selected.data.definition.id, selected.data.definition.revision].join(":")}
               agent={selected.data.definition}
+              selection={selected.data.inputSelection}
               editUrl={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}&focus=output`, { node: selected.id })} />
           </>}
           <h3>Inputs</h3>

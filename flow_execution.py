@@ -6,6 +6,7 @@ from time import perf_counter
 from fastapi import HTTPException
 
 from agent_output import run_agent
+from chat_input import ChatRequest
 from flow_graph import FlowSnapshot, path_requirements
 from flow_switch import FlowFields
 from json_mapping import MappingError, assemble, validate_mappings
@@ -70,7 +71,7 @@ def plan_flow(graph, agents, observe=None):
     return plan, incoming
 
 
-async def execute(graph, agents, library, studio, value, run):
+async def execute(graph, agents, library, studio, value, run, chat_context=None):
     plan, incoming = plan_flow(graph, agents, run)
     run.node = None
     run.emit("plan.ready", order=["api-input", *[n.id for n in plan], "api-response"])
@@ -93,6 +94,11 @@ async def execute(graph, agents, library, studio, value, run):
                                           for e in parents])
         if node.type == "apiInput":
             output = value
+            if node.data.chatInput:
+                request = ChatRequest.from_wire(value)
+                output = request.model_dump()
+                if chat_context is None:
+                    chat_context = request
         elif node.type == "apiResponse":
             output = inputs[parents[0].id] if parents else ""
         elif node.type == "json":
@@ -105,17 +111,19 @@ async def execute(graph, agents, library, studio, value, run):
                      wires=[e.id for e in graph.edges if e.source == node.id and e.sourceHandle == path_id])
         else:
             definition = agents[str(node.data.definition.id)]
-            output = await run_agent(library, studio, definition, inputs[parents[0].id], run.emit)
+            output = await run_agent(library, studio, definition, inputs[parents[0].id], run.emit,
+                                     selection=node.data.inputSelection, chat_context=chat_context)
         outputs[node.id] = output
         run.emit("node.completed", output=output, duration_ms=round((perf_counter()-start)*1000))
     run.node = None
     return outputs["api-response"]
 
 
-async def perform(document: FlowSnapshot, library, studio, value, run):
+async def perform(document: FlowSnapshot, library, studio, value, run, chat_context=None):
     run.emit("run.started", input=value)
     try:
-        result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio, value, run), RUN_TIMEOUT)
+        result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio,
+                                                value, run, chat_context), RUN_TIMEOUT)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)
         raise

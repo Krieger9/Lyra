@@ -1,5 +1,16 @@
 export type PromptReference = { name: string; version: number };
-export type OutputField = { name: string; type: "text" | "choice"; description: string; required: boolean; choices: string[] };
+export type ValueDefinition = { description: string; choices: string[] } & (
+  { type: "text" | "choice" } | { type: "object"; fields: OutputField[] } | { type: "array"; items: ValueDefinition }
+);
+export type OutputField = ValueDefinition & { name: string; required: boolean };
+export function sampleObject(fields: OutputField[]): Record<string, unknown> {
+  return Object.fromEntries(fields.map(field => [field.name, sampleValue(field)]));
+}
+function sampleValue(definition: ValueDefinition): unknown {
+  if (definition.type === "object") return sampleObject(definition.fields);
+  if (definition.type === "array") return [sampleValue(definition.items)];
+  return definition.choices?.[0] ?? "";
+}
 export type AgentDefinition = {
   id: string;
   name: string;

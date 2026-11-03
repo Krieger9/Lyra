@@ -9,6 +9,12 @@ from fastapi import HTTPException
 
 
 class MeteredOllamaAdapter(OllamaAgentAdapter):
+    async def complete_result(self, prompt, *, event_hooks=None):
+        if isinstance(prompt, list):
+            from agent_framework import Message
+            prompt = [Message(turn["role"], [turn["content"]]) for turn in prompt]
+        return await super().complete_result(prompt, event_hooks=event_hooks)
+
     async def complete_observed(self, prompt, observe):
         async def sent(request):
             if request.url.path.endswith("/api/chat"):
@@ -36,7 +42,8 @@ class _HttpModelAdapter:
         self.model = model
 
     def body(self, prompt):
-        return {"model": self.model.id, "messages": [{"role": "user", "content": prompt}]}
+        messages = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
+        return {"model": self.model.id, "messages": messages}
 
     async def complete(self, prompt):
         text, _ = await self.complete_observed(prompt, None)
@@ -90,7 +97,11 @@ class ClaudeMessagesAdapter(_HttpModelAdapter):
         return {"anthropic-version": "2023-06-01", **({"x-api-key": credential} if credential else {})}
 
     def body(self, prompt):
-        return super().body(prompt) | {"max_tokens": 4096}
+        body = super().body(prompt) | {"max_tokens": 4096}
+        messages = body["messages"]
+        if messages[0]["role"] == "system":
+            body.update(system=messages[0]["content"], messages=messages[1:])
+        return body
 
     def unpack(self, result):
         blocks = [block["text"] for block in result["content"] if block["type"] == "text"]

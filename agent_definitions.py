@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from prompt_studio import StorageConflictError
-from pydantic import BaseModel, Field
+from pydantic import JsonValue
 from sqlalchemy import select
 
 from agent_output import run_agent
@@ -12,6 +12,9 @@ from agent_store import (AgentDefinition, AgentUpdate, PromptWrite, agent_values
                          execution_agents, lock_model_catalog, serialize_agent, validate_selection)
 from auth import require_admin_access
 from app_context import library_for
+from chat_input import InputSelection
+from flow_graph import FlowRun
+from json_mapping import MappingError
 from providers import catalog_entries
 
 
@@ -62,8 +65,9 @@ def update_agent(agent_id: UUID, body: AgentUpdate, request: Request):
     return serialize_agent(row)
 
 
-class AgentTestInput(BaseModel):
-    input: str = Field(max_length=8000)
+class AgentTestInput(FlowRun):
+    input: str | dict[str, JsonValue] | list[JsonValue]
+    inputSelection: InputSelection | None = None
 
 
 @router.post("/agents/{agent_id}/test")
@@ -75,7 +79,10 @@ async def test_agent(agent_id: UUID, body: AgentTestInput, request: Request, res
         raise HTTPException(404, "Agent definition not found.")
     response.headers["Cache-Control"] = "no-store"
     try:
-        output = await asyncio.wait_for(run_agent(library, request.app.state.studio, definition, body.input), 120)
+        output = await asyncio.wait_for(run_agent(library, request.app.state.studio, definition, body.input,
+                                                  selection=body.inputSelection, chat_context=body.chatContext), 120)
+    except MappingError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except HTTPException:
         raise
     except asyncio.TimeoutError:

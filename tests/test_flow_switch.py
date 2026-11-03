@@ -53,7 +53,8 @@ class SwitchTests(unittest.TestCase):
         agent_id = str(uuid4())
         agent = {"id": agent_id}
         agents = {agent_id: {"outputSchema": {"fields": [
-            {"name": "category", "choices": ["conversation", "intelligence"]}, {"name": "reason", "choices": []}]}}}
+            {"name": "category", "type": "choice", "choices": ["conversation", "intelligence"]},
+            {"name": "reason", "type": "text"}]}}}
         routing = {"paths": [{"id": "special", "label": "Special", "checks": [
             {"field": "/Text", "operator": "notEmpty"}, {"field": "/result/category", "operator": "equals",
                                                          "value": "intelligence"}]}]}

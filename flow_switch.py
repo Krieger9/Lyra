@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from json_mapping import MappingError, lookup, pointer, validate_mappings
+from output_contract import ObjectContract
 
 
 class Condition(BaseModel):
@@ -103,13 +104,13 @@ class FlowFields:
         if node.type == "switch" and len(parents) == 1:
             return self.output(parents[0].source)
         if node.type == "apiInput":
-            return {"": []}
+            return {"/message": []} if node.data.chatInput else {"": []}
         if node.type == "agent" and node.data.definition:
             definition = self.agents.get(str(node.data.definition.id))
             if not definition:
                 return {}
             schema = definition.get("outputSchema")
-            return {"/" + f["name"]: f.get("choices", []) for f in schema["fields"]} if schema else {"": []}
+            return ObjectContract.model_validate(schema).text_paths() if schema else {"": []}
         obj = node.data.objectDefinition
         if node.type != "json" or not obj:
             return {}

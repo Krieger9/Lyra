@@ -6,6 +6,16 @@ import { allowsConnection, graphDocument, hydrateGraph } from "../flow-editor/gr
 const snapshot = JSON.parse(readFileSync(new URL("./fixtures/router-snapshot.json", import.meta.url)));
 const catalog = Object.values(snapshot.agents);
 
+test("chat input and per-node history selection survive reopening a saved flow", () => {
+  const graph = structuredClone(snapshot.graph);
+  graph.nodes.find(n => n.type === "apiInput").data.chatInput = true;
+  graph.nodes.find(n => n.type === "agent").data.inputSelection = { mode: "recent", turns: 3 };
+  const {nodes, wires} = hydrateGraph(graph, catalog);
+  const saved = graphDocument(nodes, wires, graph.viewport, graph.panelSize);
+  assert.equal(saved.nodes.find(n => n.type === "apiInput").data.chatInput, true);
+  assert.deepEqual(saved.nodes.find(n => n.type === "agent").data.inputSelection, {mode: "recent", turns: 3});
+});
+
 test("reopen and save the captured router without losing wire IDs, ports or agent references", () => {
   const { nodes, wires } = hydrateGraph(snapshot.graph, catalog);
   const save = (nodes, wires) => graphDocument(nodes, wires, snapshot.graph.viewport, snapshot.graph.panelSize);

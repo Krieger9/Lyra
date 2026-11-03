@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Background, Controls, Position, ReactFlow, ReactFlowProvider, type Edge, type Node } from "@xyflow/react";
 import type { SwitchDefinition } from "./switch";
 import { otherwise } from "./graph";
+import { useSampleInput, type InputSelection } from "./chat-input";
 
-type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string; switchDefinition?: SwitchDefinition | null } }[];
+type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string; chatInput?: boolean; inputSelection?: InputSelection | null; switchDefinition?: SwitchDefinition | null } }[];
   edges: (Edge & { name?: string | null })[] };
 type Document = { id: string; name: string; revision: number; graph: Graph };
 type Entry = { seq: number; node: string | null; kind: string; at: string; elapsed_ms: number; data: Record<string, unknown> };
@@ -22,6 +23,7 @@ function eventLabel(event: Entry) {
     case "node.skipped": return "Skipped · inactive input path";
     case "gate.evaluated": return `${data.passed ? "Pass" : "Fail"} · ${data.field ?? "output"} · ${data.operation}`;
     case "mapping.applied": return `${data.source} → ${data.target}`;
+    case "input.selected": return `${data.source === "chat" ? "Original chat" : "Incoming wire"} · ${data.priorTurns} prior turns`;
     case "template.started": return `Render ${data.part} template`;
     case "template.rendered": return `Rendered ${data.part}`;
     case "schema.inserted": return "Insert output schema";
@@ -53,7 +55,9 @@ function download(run: RecordPage) {
 }
 
 export function RunView({ design, onClose }: { design: Document; onClose: () => void }) {
-  const [input, setInput] = useState("");
+  const exposeChat = Boolean(design.graph.nodes.find(n => n.type === "apiInput")?.data.chatInput);
+  const usesChat = design.graph.nodes.some(n => n.type === "agent" && n.data.inputSelection?.source === "chat");
+  const { input, controls } = useSampleInput(exposeChat || usesChat);
   const [history, setHistory] = useState<Summary[]>([]);
   const [runId, setRunId] = useState(new URLSearchParams(location.search).get("run") ?? "");
   const [run, setRun] = useState<RecordPage>();
@@ -110,7 +114,10 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     setBusy(true);
     setError("");
     try {
-      const created = await api<{id: string}>(`/flows/${design.id}/runs`, json("POST", {input, revision: design.revision}));
+      const wireInput = !exposeChat && typeof input !== "string" ? input.message : input;
+      const created = await api<{id: string}>(`/flows/${design.id}/runs`, json("POST", {
+        input: wireInput, chatContext: usesChat ? input : undefined, revision: design.revision
+      }));
       open(created.id);
       setRefresh(n => n+1);
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
@@ -196,7 +203,7 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
         onNodeClick={(_, n) => selectNode(n.id)} onPaneClick={() => selectNode("")}>
         <Background/><Controls showInteractive={false}/></ReactFlow></ReactFlowProvider></div>
       <aside className="flow-inspector run-inspector">
-        <h3>Run saved flow</h3><label>Raw input<textarea rows={3} maxLength={8000} value={input} onChange={e=>setInput(e.target.value)}/></label>
+        <h3>Run saved flow</h3>{controls}
         <button disabled={busy} onClick={start}>Run revision {design.revision}</button>
         <details><summary>Chat connection</summary><p>{binding ? `Active: ${binding.name} · revision ${binding.revision}` : "Chat uses the default prompt."}</p>
           <button disabled={busy} onClick={changeActivation}>{isActive ? "Disconnect from chat" : "Use this revision in Lyra chat"}</button></details>

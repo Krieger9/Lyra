@@ -2,15 +2,16 @@ import type { Connection, Edge, Node, Viewport } from "@xyflow/react";
 import type { AgentDefinition } from "./catalog";
 import type { JsonNodeData } from "./json-mapping";
 import type { SwitchItem } from "./switch";
+import type { InputSelection } from "./chat-input";
 
 export type GenericItem = Node<{ label: string }, "item">;
 export type JsonItem = Node<JsonNodeData, "json">;
-export type ApiInput = Node<{ label: string }, "apiInput">;
+export type ApiInput = Node<{ label: string; chatInput?: boolean }, "apiInput">;
 export type ApiResponse = Node<{ label: string }, "apiResponse">;
-export type Agent = Node<{ label: string; definition: AgentDefinition | null }, "agent">;
+export type Agent = Node<{ label: string; definition: AgentDefinition | null; inputSelection?: InputSelection | null }, "agent">;
 export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent | SwitchItem;
 export type PanelSize = { width: number; height: number };
-type SavedNode = Exclude<FlowItem, Agent> | Node<{ label: string; definition: { id: string } | null }, "agent">;
+type SavedNode = Exclude<FlowItem, Agent> | Node<Omit<Agent["data"], "definition"> & { definition: { id: string } | null }, "agent">;
 export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize };
 
 export type Wire = Edge & { name?: string | null; readAs?: "value" | "json" };
@@ -45,6 +46,8 @@ export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewpo
       id: node.id, type: node.type, position: node.position,
       data: { label: node.data.label, definition: node.type === "agent" && node.data.definition
         ? { id: node.data.definition.id } : null,
+        ...(node.type === "apiInput" && node.data.chatInput ? { chatInput: true } : {}),
+        ...(node.type === "agent" && node.data.inputSelection ? { inputSelection: node.data.inputSelection } : {}),
         ...(node.type === "json" ? { objectDefinition: node.data.objectDefinition ?? null } : {}),
         ...(node.type === "switch" ? { switchDefinition: node.data.switchDefinition } : {}) },
     })),
@@ -87,7 +90,7 @@ export function withEndpoints(nodes: FlowItem[] = []) {
   const input = nodes.find(node => node.type === "apiInput");
   const response = nodes.find(node => node.type === "apiResponse");
   return [
-    { ...startingNode, ...input, id: startingNode.id, deletable: false, data: startingNode.data },
+    { ...startingNode, ...input, id: startingNode.id, deletable: false, data: { ...input?.data, ...startingNode.data } },
     ...nodes.filter(node => node.type !== "apiInput" && node.type !== "apiResponse"),
     { ...responseNode, ...response, id: responseNode.id, deletable: false, data: responseNode.data },
   ] as FlowItem[];
@@ -97,7 +100,7 @@ export function hydrateGraph(graph: SavedGraph, agents: AgentDefinition[]) {
   const items = graph.nodes.map((node): FlowItem => {
     if (node.type !== "agent") return node;
     const definition = agents.find(agent => agent.id === node.data.definition?.id) ?? null;
-    return { ...node, data: { label: definition?.name ?? "Unconfigured agent", definition } };
+    return { ...node, data: { ...node.data, label: definition?.name ?? "Unconfigured agent", definition } };
   });
   return { nodes: withEndpoints(items), wires: nameExistingWires(graph.edges) };
 }
