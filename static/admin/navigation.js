@@ -77,7 +77,8 @@ export function renderBreadcrumbs() {
     const parent = adminUrl(url.searchParams.get("returnTo"));
     if (parent && relativeUrl(parent) !== relativeUrl(url)) append(parent, depth + 1);
     if (url.pathname === "/admin/") return;
-    const editor = url.searchParams.has("new") || url.searchParams.has("id") || url.searchParams.has("name");
+    const editor = url.pathname !== "/admin/flow/" &&
+      (url.searchParams.has("new") || url.searchParams.has("id") || url.searchParams.has("name"));
     const listUrl = new URL(url);
     for (const key of ["new", "id", "name", "draft", "saved"]) listUrl.searchParams.delete(key);
     crumbs.push({ title: sections[url.pathname], href: editor ? relativeUrl(listUrl) : relativeUrl(url) });

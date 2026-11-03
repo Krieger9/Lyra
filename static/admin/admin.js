@@ -62,11 +62,13 @@ async function loadHome() {
   }
   if (!response.ok) throw new Error("Could not load the configuration. Refresh to try again.");
   const home = await response.json();
+  window.lyraAssetVersion = home.ui_version;
+  const assetUrl = path => path + "?v=" + encodeURIComponent(home.ui_version);
   for (const field of document.querySelectorAll("[data-model]")) field.textContent = home.chat_model;
   for (const field of document.querySelectorAll("[data-library]")) field.textContent = home.prompt_library;
   sidebar.hidden = false;
   document.querySelector("#workspace").hidden = false;
-  const { initializeNavigation } = await import("/admin/navigation.js");
+  const { initializeNavigation } = await import(assetUrl("/admin/navigation.js"));
   initializeNavigation();
   window.lyraAdminRequest = async (path, options = {}) => {
     const { accessToken } = await auth.client.acquireTokenSilent({ scopes: auth.scopes, account });
@@ -84,15 +86,15 @@ async function loadHome() {
     return result.json();
   };
   if (page === "agents" || page === "prompts") {
-    const { mountConfiguration } = await import("/admin/configuration.js");
+    const { mountConfiguration } = await import(assetUrl("/admin/configuration.js"));
     await mountConfiguration(page);
   }
   if (page === "flow") {
     const stylesheet = document.createElement("link");
     stylesheet.rel = "stylesheet";
-    stylesheet.href = "/admin/flow-assets/editor.css";
+    stylesheet.href = assetUrl("/admin/flow-assets/editor.css");
     document.head.append(stylesheet);
-    await import("/admin/flow-assets/editor.js");
+    await import(assetUrl("/admin/flow-assets/editor.js"));
   }
   const descriptions = {
     home: "Your Lyra workspace at a glance.",

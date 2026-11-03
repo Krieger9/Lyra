@@ -63,6 +63,34 @@ The editor previews selected library text and links to **PromptStudio** to creat
 
 Breadcrumbs show the context across admin pages. Use them or the Back and Forward controls to navigate. Unsaved forms and flow layouts, including wiring and canvas position, are restored from browser session storage in the current tab. Saved definitions and prompt versions persist in PostgreSQL.
 
+Every flow also includes a permanent **API Response**. Connect one Agent's right output port to its left input port to return that Agent's exact text as the response body. A successful run returns HTTP 200, with an empty body when API Response is unconnected. Failed runs return an error status. Existing browser drafts gain this response node automatically.
+
+Choose **JSON** under Item type to combine inputs into an object. Each JSON node owns a base JSON object and a list of field mappings. Start with literal defaults or `null` placeholders, connect the inputs, then choose **Add mapping** in Properties. Each rule selects an incoming wire, a read expression and an existing destination path. The wire ID stays stable when its source is renamed or rewired. A disconnected wire must be reassigned in its mapping. Older JSON nodes can be configured with **Define object**.
+
+For example, use this base to assemble a session update:
+
+```json
+{"session":{"id":null,"phase":"open"},"message":""}
+```
+
+| Incoming wire | Read expression | Write to field |
+| --- | --- | --- |
+| API Input | `.json/sessionId` | `/session/id` |
+| Agent output | `.text` | `/message` |
+
+An input object containing `{"sessionId":42}` and an Agent reply of `Hello` produce `{"session":{"id":42,"phase":"open"},"message":"Hello"}`. **Preview with sample inputs** evaluates the same rules as a saved run using sample values for each wire. Previewing requires admin access and does not call the model.
+
+- `.text` preserves incoming text, including whitespace. Structured input becomes compact JSON text with sorted object keys.
+- `.json` copies a whole JSON value. `.json/path` reads a field, parsing text as JSON when necessary. Arrays, objects, booleans, numbers and null retain their types.
+- Paths use slash-separated keys and zero-based array indices, such as `/messages/0/content`. Use `~1` for a slash in a key and `~0` for a tilde. Destination fields and indices must exist in the base. Each mapping owns one destination, so two rules cannot write to the same field or its parent and child.
+- Runs validate connected wires, read expressions and destinations before calling agents. Missing values and invalid JSON input produce HTTP 422 when that input is read. Each run starts with a fresh copy of the base. Nodes support up to 64 mappings and an assembled object up to 256 KiB.
+
+The run API accepts text, an object or an array in the `input` field. JSON nodes can feed other JSON nodes directly. API Response sends a mapped object as `application/json`. An Agent receives compact JSON text when its input comes from an object. Session values travel through the current run. Cross-run session storage is a separate capability.
+
+Enter a **Flow name** and select **Save flow** to persist the graph, Agent identities, canvas viewport and panel size in `agent_studio.flows`. Use **Saved flows** and **Open flow** to restore a design, or **New flow** to start another. Updates use a revision check to protect against stale edits. Unfinished configurations can be saved as drafts.
+
+Flow management and execution use the existing admin scope and role. `GET/POST /api/admin/flows` lists or creates flows. `GET/PUT /api/admin/flows/{id}` opens or updates one. `POST /api/admin/flows/{id}/run` accepts `{"input":"incoming text"}`. Agent calls use AgentStudio, render versioned instructions and optional templates through PromptStudio, and record traces. Each connected Agent currently requires exactly one incoming source. Connected unconfigured agents, cycles and unsupported joins return HTTP 422 before any model call. Model failures return 503 and execution timeouts return 504. A connected API Response returns the selected Agent's output as `text/plain`, preserving whitespace.
+
 All definition and prompt APIs require `ENTRA_ADMIN_SCOPE` and `User.Admin`. Updates to an agent carry its revision and return HTTP 409 if another editor has saved a newer revision. Prompt edits publish new versions, and existing agents retain their selected versions until explicitly updated.
 
 The default model is `qwen2.5-14b-q5:latest`, available on the original development machine. On another machine, set `OLLAMA_MODEL` to an exact name from `ollama list`. For example, to use `llama3.2`, run `ollama pull llama3.2` and set `$env:OLLAMA_MODEL = "llama3.2"`. Lyra connects to `http://127.0.0.1:11434` by default. Set `OLLAMA_HOST` to use another Ollama server.

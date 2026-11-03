@@ -8,11 +8,20 @@ body:has(.flow-editor) .layout { min-height: 0; }
 #workspace:has(.flow-editor) { flex: 1; min-height: 0; padding: 0; border: 0; border-radius: 0; }
 #flow-page:not([hidden]), #flow-editor, .flow-editor { height: 100%; min-height: 0; }
 .flow-editor { display: flex; flex-direction: column; }
-.flow-toolbar { display: flex; flex-shrink: 0; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+.flow-toolbar { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) 10px var(--panel-size, 280px); border-bottom: 1px solid var(--line); }
+.flow-management { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; min-width: 0; padding: 12px 20px; }
+.flow-item-tools { grid-column: 3; display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: center; align-items: center; gap: 8px; min-width: 0; padding: 12px 16px; border-left: 1px solid var(--line); background: #faf9fc; }
+.flow-item-tools label { font-size: 13px; }
+.flow-item-tools select { min-width: 0; width: 100%; }
+.flow-item-tools button { grid-column: 1 / -1; }
 .flow-toolbar h2 { margin: 0; }
-.flow-toolbar, .flow-actions { flex-wrap: wrap; }
+.flow-actions { flex-wrap: wrap; }
 .flow-actions { display: flex; align-items: center; gap: 8px; }
 .flow-actions select { max-width: 240px; }
+.flow-actions input { max-width: 220px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.flow-actions button { padding: 8px 12px; }
+.flow-save-status { flex-basis: 100%; margin: 0; font-size: 13px; color: #625e70; }
+.flow-save-status:empty { display: none; }
 .catalog-status { width: 100%; margin: 0; font-size: 13px; }
 .flow-inspector a { display: inline-block; margin-bottom: 20px; }
 .flow-editor select { max-width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: white; color: inherit; font: inherit; }
@@ -21,10 +30,16 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .flow-toolbar small, .flow-inspector p { color: #625e70; }
 .add-item { background: var(--ink); color: white; padding: 9px 14px; }
 .add-item:hover:enabled { background: #514286; }
-.flow-grid { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 280px; }
+.flow-grid { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 10px var(--panel-size, 280px); }
+.flow-grid.resizing { user-select: none; }
+.panel-divider { display: grid; place-items: center; cursor: col-resize; touch-action: none; background: #f0eef5; }
+.panel-divider::after { content: ""; width: 3px; height: 36px; border-radius: 3px; background: #aaa0bf; }
+.panel-divider:hover, .panel-divider:focus-visible, .resizing .panel-divider { background: #ded7ed; }
+.panel-divider:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
 .flow-canvas { position: relative; height: 100%; min-height: 0; min-width: 0; background: #faf9fc; overflow: hidden; }
 .flow-inspector { min-width: 0; min-height: 0; overflow-y: auto; padding: 20px; border-left: 1px solid var(--line); }
 .flow-inspector h3 { margin: 0 0 12px; font-size: 16px; }
+.flow-inspector code { display: block; overflow-wrap: anywhere; margin-bottom: 20px; font-size: 12px; }
 .flow-inspector p, .flow-inspector label { font-size: 14px; line-height: 1.5; }
 .flow-inspector input { display: block; width: 100%; font: inherit; margin: 4px 0 24px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
 .item-card { width: 168px; padding: 12px 16px; border: 1px solid #bcb6cd; border-radius: 9px; background: white; overflow-wrap: anywhere; }
@@ -34,10 +49,24 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .api-input-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: #dcefe7; color: #19624e; }
 .api-input-icon svg { width: 22px; height: 22px; }
 .api-input-card .item-kind { color: #316754; }
+.api-response-card { display: flex; align-items: center; gap: 10px; width: 200px; border-color: #8bafcc; background: #f3f8fd; }
+.api-response-card .api-input-icon { color: #245b83; background: #dcebf7; flex: none; }
+.api-response-card .item-kind { color: #245b83; }
 .react-flow__node.selected .api-input-card { border-color: #27755d; box-shadow: 0 0 0 2px #c3e2d6; }
 .agent-card { display: flex; align-items: center; gap: 10px; background: #f7f6fd; border-color: #ada1cd; }
 .agent-icon { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: #59428a; background: #e8e1f6; }
 .agent-icon svg { width: 23px; height: 23px; }
+.json-card { display: flex; align-items: center; gap: 10px; background: #fffaf0; border-color: #cbb06e; }
+.json-icon { flex: none; font: bold 22px Consolas, monospace; color: #87621d; }
+.flow-input .connection-id { flex-basis: 100%; margin: 0; font-size: 11px; }
+.json-mapper { margin-bottom: 20px; }
+.json-mapper textarea { width: 100%; display: block; margin: 4px 0 8px; padding: 8px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; font: 13px/1.4 Consolas, monospace; }
+.json-mapper fieldset { min-width: 0; margin: 10px 0; border: 1px solid var(--line); border-radius: 6px; }
+.json-mapper fieldset input, .json-mapper fieldset select { margin-bottom: 10px; }
+.json-mapper details { margin-top: 14px; }
+.json-mapper summary { cursor: pointer; }
+.json-mapper p code { display: inline; }
+.json-mapper [role="alert"] { color: #a12f25; }
 .agent-validation { display: block; margin-top: 6px; color: #a12f25; font-size: 11px; }
 .agent-card.invalid-agent { border-color: #b95043; background: #fff7f4; }
 .react-flow__node.selected .invalid-agent { border-color: #a12f25; box-shadow: 0 0 0 2px #f2cdc5; }
@@ -45,6 +74,10 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .flow-canvas .flow-port { width: 14px; height: 14px; border: 2px solid white; background: #66558a; }
 .api-input-card .flow-port { background: #27755d; }
 @media (max-width: 900px) {
-  .flow-grid { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
-  .flow-inspector { max-height: 30dvh; border-left: 0; border-top: 1px solid var(--line); }
+  .flow-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .flow-item-tools { grid-column: 1; border-left: 0; border-top: 1px solid var(--line); }
+  .flow-grid { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 10px var(--panel-size, 240px); }
+  .panel-divider { cursor: row-resize; }
+  .panel-divider::after { width: 36px; height: 3px; }
+  .flow-inspector { border-left: 0; border-top: 1px solid var(--line); }
 }

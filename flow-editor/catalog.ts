@@ -11,7 +11,7 @@ export type Catalog = { agents: AgentDefinition[]; prompts: LibraryPrompt[] };
 
 declare global {
   interface Window {
-    lyraAdminRequest: (path: string) => Promise<Catalog>;
+    lyraAdminRequest: <T = Catalog>(path: string, options?: RequestInit) => Promise<T>;
   }
 }
 

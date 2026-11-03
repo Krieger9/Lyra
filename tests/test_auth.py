@@ -60,7 +60,19 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.studio.model.model.id = "test-model"
         response = await self.browser.get("/api/admin/home", headers=self.headers(scp="access-as-admin", roles=["User.Admin"]))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"prompt_library": "lyra", "chat_model": "test-model"})
+        home = response.json()
+        self.assertEqual(home["prompt_library"], "lyra")
+        self.assertEqual(home["chat_model"], "test-model")
+        self.assertRegex(home["ui_version"], r"^[a-f0-9]{16}$")
+
+    async def test_admin_assets_are_versioned_and_revalidated(self):
+        for path in ("/admin/", "/admin/flow/", "/admin/agents/", "/admin/prompts/"):
+            response = await self.browser.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["cache-control"], "no-cache")
+            self.assertRegex(response.text, r'/admin/admin.js\?v=[a-f0-9]{16}')
+        response = await self.browser.get("/admin/admin.js")
+        self.assertEqual(response.headers["cache-control"], "no-cache")
 
     async def test_definition_endpoints_require_admin_scope_and_role(self):
         requests = [
@@ -68,6 +80,12 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             ("POST", "/api/admin/agents"),
             ("PUT", "/api/admin/agents/" + str(uuid4())),
             ("POST", "/api/admin/prompts"),
+            ("GET", "/api/admin/flows"),
+            ("GET", "/api/admin/flows/" + str(uuid4())),
+            ("POST", "/api/admin/flows"),
+            ("POST", "/api/admin/flows/preview-json"),
+            ("PUT", "/api/admin/flows/" + str(uuid4())),
+            ("POST", "/api/admin/flows/" + str(uuid4()) + "/run"),
         ]
         for method, path in requests:
             response = await self.browser.request(method, path)

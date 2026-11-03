@@ -1,4 +1,5 @@
-import { draftSession, linkWithReturn, renderBreadcrumbs, returnDestination, returnWithSelection } from "./navigation.js";
+const { draftSession, linkWithReturn, renderBreadcrumbs, returnDestination, returnWithSelection } =
+  await import("/admin/navigation.js?v=" + encodeURIComponent(window.lyraAssetVersion));
 
 const request = (...args) => window.lyraAdminRequest(...args);
 const RAW_INPUT = "raw";

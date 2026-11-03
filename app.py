@@ -1,5 +1,6 @@
 import logging
 import os
+from hashlib import sha256
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
@@ -9,7 +10,7 @@ from agent_studio import (
     OllamaAgentAdapter, PromptStudioAdapter, Protocol,
 )
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from prompt_studio import NotFoundError, PromptLibrary, SQLAlchemyStorage
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field, StringConstraints
 
 from auth import require_admin_access, require_chat_access, settings
 from agent_definitions import create_schema as create_agent_schema, router as definitions_router, seed_defaults
+from flows import create_schema as create_flow_schema, router as flows_router
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -30,6 +32,23 @@ user: {{ request }}
 assistant:"""
 
 MessageText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)]
+
+
+def ui_version():
+    digest = sha256()
+    static = ROOT / "static"
+    for path in sorted(static.rglob("*")):
+        if path.is_file() and path.suffix in (".html", ".js", ".css"):
+            digest.update(str(path.relative_to(static)).encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+class RevalidatingStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 class Turn(BaseModel):
@@ -56,6 +75,7 @@ async def lifespan(app: FastAPI):
         traces = PostgresTraceAdapter(storage.engine)
         traces.create_schema()
         create_agent_schema(storage.engine)
+        create_flow_schema(storage.engine)
         library = PromptLibrary(storage, name="lyra")
         seed_defaults(library)
         try:
@@ -79,6 +99,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Lyra Chat", lifespan=lifespan)
 app.include_router(definitions_router)
+app.include_router(flows_router)
 MSAL = ROOT / "node_modules/@azure/msal-browser/lib"
 
 
@@ -101,15 +122,21 @@ def spa_callback():
 def admin_home(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     studio = request.app.state.studio
-    return {"prompt_library": studio.prompts.library.name, "chat_model": studio.model.model.id}
+    return {"prompt_library": studio.prompts.library.name, "chat_model": studio.model.model.id,
+            "ui_version": ui_version()}
 
 
 @app.get("/admin/providers/", include_in_schema=False)
+@app.get("/admin/", include_in_schema=False)
 @app.get("/admin/flow/", include_in_schema=False)
 @app.get("/admin/agents/", include_in_schema=False)
 @app.get("/admin/prompts/", include_in_schema=False)
 def admin_page():
-    return FileResponse(ROOT / "static/admin/index.html")
+    version = ui_version()
+    html = (ROOT / "static/admin/index.html").read_text(encoding="utf-8")
+    for asset in ("/chat.css", "/admin/admin.css", "/vendor/msal.js", "/entra.js", "/admin/admin.js"):
+        html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/chat/session")
@@ -143,4 +170,4 @@ async def chat(body: ChatRequest, request: Request):
     return ChatReply(reply=reply)
 
 
-app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="ui")
+app.mount("/", RevalidatingStaticFiles(directory=ROOT / "static", html=True), name="ui")
