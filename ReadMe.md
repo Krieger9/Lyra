@@ -4,12 +4,16 @@ Lyra is a local chat application. A single FastAPI process serves the browser UI
 
 ## Foundation
 
-- **AgentStudio owns the agentic workflow.** Each chat turn goes through `AgentStudio.run`, which renders the prompt, calls the configured Ollama model and records the run in PostgreSQL. [AgentStudio](../Infrastructure/AgentStudio/README.md)
-- **PromptStudio owns prompt management and the template library.** Lyra stores the `chat` template in the `lyra` library in PostgreSQL. On first launch it seeds the template if absent. Each turn renders the latest version through AgentStudio’s `PromptStudioAdapter`. [PromptStudio](../Infrastructure/PromptStudio/README.md)
+- **AgentStudio runs individual agent calls.** Built-in chat uses the configured Ollama model. When a flow is activated for chat, Lyra executes the saved graph and uses AgentStudio for each agent node. [AgentStudio](../Infrastructure/AgentStudio/README.md)
+- **PromptStudio owns prompt versions, groups and rendering.** Built-in chat renders the latest `chat` template in the `lyra` library through AgentStudio’s `PromptStudioAdapter`. [PromptStudio](../Infrastructure/PromptStudio/README.md)
+
+Lyra composes the library and runner at startup. The admin API and MCP inspector access the library directly. Publish edits with `PromptLibrary.add` and seed defaults with `ensure_initial`, which preserves version history across concurrent startups. A saved agent pins the root instruction and prompt versions. If either template includes other prompts, those dependencies resolve to their latest versions. PromptStudio supports pinning transitive dependencies with a group. Lyra’s agent editor currently stores individual version references.
+
+AgentStudio owns the Ollama call and client lifecycle. Lyra’s metered adapter supplies HTTP event hooks for the flow debugger. Lyra also has HTTP clients for OpenAI-compatible and Claude endpoints so the debugger can capture wire events and the operator can bind credentials to exact API bases.
 
 ## Run locally
 
-Keep the two infrastructure checkouts at the relative paths in `requirements.txt`. From the Lyra repository root, run the following in PowerShell with Python 3.10+, npm and Ollama installed.
+Keep the two infrastructure checkouts at the relative paths in `requirements.txt`. From the Lyra repository root, run the following in PowerShell with Python 3.10+ and npm installed. Install Ollama if you want to serve local models.
 
 ```powershell
 py -m venv .venv
@@ -24,6 +28,10 @@ ollama list
 Create a database named `lyra` and set `DATABASE_URL` in `.env` to its PostgreSQL SQLAlchemy URL. The application user needs permission to create schemas and tables at initial setup. PromptStudio owns `prompt_studio.prompt_versions`, `prompt_groups`, and `prompt_group_members`. AgentStudio owns `agent_studio.traces`. Lyra's configuration adapter stores reusable definitions in `agent_studio.agent_definitions`, with foreign keys to PromptStudio versions.
 
 For local development, the included Compose project provides this database on `127.0.0.1:55432`. On a fresh checkout, generate a password with `python -c "import secrets; print(secrets.token_urlsafe(36))"` and use it for both database settings shown in `.env.example`. Start the database manually with `docker compose up -d --wait postgres` before launching FastAPI. Stop it with `docker compose stop postgres`. It uses a named volume and has automatic restart disabled.
+
+Lyra serializes database setup across startup workers. After the two Studio libraries initialize their tables, Lyra applies pending revisions to its agent, catalog, flow, and run tables. It records revisions in `agent_studio.lyra_schema_migrations`. The first upgrade adopts existing tables, preserves pinned prompts and provider assignments, and imports model names from legacy groups. Later startups read the revision history and skip completed work. A failed upgrade rolls back all pending Lyra revisions. Correct the cause and restart to retry.
+
+For future schema changes, append a numbered revision to `schema_migrations.py`, update the SQLAlchemy table declarations, and test the upgrade against the preceding layout. Keep published revisions fixed. To inspect an installation, run `SELECT revision, applied_at FROM agent_studio.lyra_schema_migrations ORDER BY revision`.
 
 The deployment target is **Azure Database for PostgreSQL Flexible Server**. Provision the `lyra` database there and supply its TLS-enabled connection URL through the deployment environment. Local and hosted instances use the same two schemas. The Compose password setting is only used to initialize the local container.
 
@@ -49,6 +57,12 @@ MSAL Browser signs the user in with PKCE and requests `api://19a2bf26-c383-4fb6-
 
 Choose **Configure Lyra** from chat to open the read-only admin home. It uses the existing SPA registration and callback, requests the backend scope named by `ENTRA_ADMIN_SCOPE`, and returns to the requested admin page after sign-in. The frontend registration needs delegated permission to that backend scope. After FastAPI checks access, the left navigation opens [Providers](http://localhost:8765/admin/providers/) and [Flow View](http://localhost:8765/admin/flow/). The panel collapses to an icon rail and slides over the page on smaller screens. Select the Lyra brand to return to the configuration home. `ENTRA_ADMIN_ROLES` defaults to `User.Admin`. Chat continues to request `ENTRA_CHAT_SCOPE`.
 
+Register the model identifiers served by your endpoints in **Models**. In **Model groups**, select the models to offer together. In **Protocols**, select the installed client adapter for a named protocol. Lyra includes OpenAI Chat Completions, Claude Messages and Ollama native. A provider groups an API base URI, a protocol and a model group. An agent selects a provider and one model from that group. Create and edit links beside selectors preserve the calling draft and assign the saved item on return.
+
+For example, an Ollama server can use OpenAI Chat Completions at `http://localhost:11434/v1` or Ollama native at `http://localhost:11434`. For hosted APIs, use `https://api.openai.com/v1` with `OPENAI_API_KEY` or `https://api.anthropic.com/v1` with `ANTHROPIC_API_KEY`. For a custom authenticated endpoint, set `LYRA_PROVIDER_KEY_ENV` to a JSON object mapping the exact API base to a server-side environment variable name. Keys are resolved when requests run. Add future client implementations to `ADAPTERS` in `model_adapter.py` to expose them in the protocol editor.
+
+**Test agent**, flow runs and activated chat flows use the selected provider and model. **Use default chat model** uses the existing environment configuration. Activating a flow for chat captures the provider URI, adapter and model. Activate again to pick up later changes.
+
 An Azure-hosted backend can use managed identity for its own calls to downstream Azure resources. [Microsoft managed identity overview](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity)
 
 ### Start the server
@@ -66,6 +80,12 @@ The editor previews selected library text and links to **PromptStudio** to creat
 Breadcrumbs show the context across admin pages. Use them or the Back and Forward controls to navigate. Unsaved forms and flow layouts, including wiring and canvas position, are restored from browser session storage in the current tab. Saved definitions and prompt versions persist in PostgreSQL.
 
 Every flow also includes a permanent **API Response**. Connect one Agent's right output port to its left input port to return its text or structured object as the response body. A successful run returns HTTP 200, with an empty body when API Response is unconnected. Failed runs return an error status. Existing browser drafts gain this response node automatically.
+
+Choose **Switch** under **Item type** to route an input. Connect an Agent or JSON output to the Switch, then select **Add check** in its properties. Text fields support **is empty** and **is not empty**. Missing, null and whitespace-only text count as empty. Choice fields offer **equals** and **does not equal**, with values from the connected classifier, including choices copied through JSON mappings. A missing choice matches neither comparison.
+
+For example, combine the request text and classifier output in a JSON node. Give the Switch a first path named **Incomplete** with **Any check** on an empty text or reason field. Give the next path an equality check on the classifier's category. Connect each named port and **Otherwise** to its destination. The first matching path forwards the original input. Renaming or moving a path preserves its wires. Run View records the selected path and skipped nodes.
+
+Outputs from mutually exclusive paths can connect to the same API Response. Exactly one connected response wire must be active on each run. Other nodes require all their inputs, so a JSON node with an inactive input is skipped. A removed choice or incompatible field must be repaired before the flow can run or be activated for chat.
 
 Choose **JSON** under Item type to combine inputs into an object. In **Inputs**, enter a **Wire name** and choose **Apply name**. Names like `request` or `classification` are local to the receiving node. Use letters, digits and underscores, starting with a letter or underscore. Wires display their names on the canvas. Select a wire or inspect its input or mapping row for the full connection ID.
 
@@ -101,7 +121,7 @@ With PostgreSQL already running, use the Windows PowerShell scripts from the Lyr
 .\stop.ps1
 ```
 
-`start.ps1` starts FastAPI in the background and waits for the chat UI. It reuses a running local Ollama server, or starts one if the configured loopback endpoint is offline. A remote `OLLAMA_HOST` is managed separately. `stop.ps1` stops only processes these scripts started. Both commands can be run repeatedly. Logs are in `.lyra/run/`. Manage PostgreSQL separately using the commands above.
+`start.ps1` starts FastAPI in the background and waits for the chat UI. It reuses a running local Ollama server, or starts one when installed if the configured loopback endpoint is offline. Use `.\start.ps1 -SkipOllama` for a workspace using external providers. A remote `OLLAMA_HOST` is managed separately. `stop.ps1` stops only processes these scripts started. Both commands can be run repeatedly. Logs are in `.lyra/run/`. Manage PostgreSQL separately using the commands above.
 
 Open [Lyra Chat](http://localhost:8765/). Signed-out visitors go directly to Microsoft sign-in. After FastAPI verifies the chat access token, users with an admin role see **Configure Lyra**. Enter sends a message and Shift + Enter adds a line. **New chat** or a page refresh clears the tab’s conversation.
 
@@ -110,6 +130,8 @@ Open [Lyra Chat](http://localhost:8765/). Signed-out visitors go directly to Mic
 Open a saved flow and choose **Run flow** (or **Save and run** for a draft). Enter raw input and run the displayed revision. The design stays in its editor while a read-only diagram shows the selected execution. Select a node to see the values on its incoming wires, its output, elapsed times and detailed events. The recent-runs selector includes API, debugger and chat executions. **Export run JSON** includes the captured graph and agent definitions.
 
 Under **Chat connection**, **Use this revision in Lyra chat** pins the graph and resolved agent definitions for that library. Later design edits apply to debug runs when saved. To publish changed agents on the same flow revision, disconnect and activate again. Active chat passes the raw message into API Input and displays the API Response body, including structured JSON. Admins can follow **Inspect run** from chat. Disconnecting restores the built-in chat prompt and its history input.
+
+The persisted `FlowSnapshot` contains the flow ID, name, revision, graph, and resolved agents keyed by agent ID. Each selected provider contributes its endpoint, protocol adapter, and permitted models. Agents using the default model resolve it from the running application. At execution, PromptStudio renders the pinned root versions and resolves ungrouped includes to their latest versions. Provider credentials are looked up for the saved API base when the call runs. Historical run inspection reads the original stored JSON. The Python chat test and TypeScript editor tests share `tests/fixtures/router-snapshot.json`, captured from a synthetic PostgreSQL run before the snapshot model was introduced.
 
 ### Execution state and integration
 
@@ -147,3 +169,12 @@ A successful response has the shape `{"reply":"Turquoise."}`. Invalid input retu
 To publish a revision, connect PromptStudio to the same PostgreSQL database, select `PromptLibrary(storage, name="lyra")` and call `library.add("chat", new_template)`. The next request uses that revision. The template receives `request` and a list of `history` entries with `role` and `content`.
 
 Each trace row contains the run UUID, start and finish timestamps, status and the full JSONB payload. The payload retains the input, rendered prompt and reply after the tab is cleared. Restrict database access accordingly.
+
+## Test a change across the three checkouts
+
+From Lyra, use the development environment containing the editable Studio packages. Install the Studio test extra for pytest, run `npm ci`, and use Node 22.18 or later for the TypeScript editor tests. Set `LYRA_TEST_DATABASE_URL` in the environment or local `.env` to a PostgreSQL test database whose user can create schemas. Tests create and remove isolated schemas. Full verification requires that database and stops at the first failed stage.
+
+```powershell
+.\.venv\Scripts\python -m pip install -e "../Infrastructure/PromptStudio[test]"
+.\.venv\Scripts\python scripts/verify.py
+```

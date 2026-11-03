@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app_context import library_for
 from auth import require_admin_access
 from flow_execution import plan_flow, run_in_background
-from flow_graph import FlowGraph, FlowRun, snapshot
+from flow_graph import FlowRun, snapshot
 from json_mapping import MappingError
 from run_store import Run, activate, activation, deactivate, inspect_run, recent
 
@@ -50,7 +50,7 @@ def read_run(run_id: UUID, request: Request, after: int = Query(0, ge=0), limit:
 @router.get("/chat-flow")
 def chat_binding(request: Request):
     doc = activation(library_for(request))
-    return {key: doc[key] for key in ("id", "revision", "name")} if doc else None
+    return doc.model_dump(include={"id", "revision", "name"}, mode="json") if doc else None
 
 
 @router.put("/chat-flow/{flow_id}")
@@ -58,13 +58,13 @@ def bind(flow_id: UUID, body: Revision, request: Request):
     library = library_for(request)
     document = snapshot(library, flow_id, body.revision)
     try:
-        _, incoming = plan_flow(FlowGraph.model_validate(document["graph"]), document["agents"])
+        _, incoming = plan_flow(document.graph, document.agent_definitions())
     except MappingError as exc:
         raise HTTPException(422, str(exc)) from exc
     if not incoming["api-response"]:
         raise HTTPException(422, "Connect API Response before activating the flow for chat.")
     activate(library, document)
-    return {"id": str(flow_id), "revision": body.revision, "name": document["name"]}
+    return {"id": str(flow_id), "revision": body.revision, "name": document.name}
 
 
 @router.delete("/chat-flow/{flow_id}")

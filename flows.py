@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from app_context import library_for
 from auth import require_admin_access
-from flow_graph import FlowWrite, FlowUpdate, FlowRun, flows, load_flow, serialize_flow, snapshot
+from flow_graph import FlowGraph, FlowWrite, FlowUpdate, FlowRun, flows, graph_agents, load_flow, serialize_flow, snapshot
+from flow_switch import FlowFields
 from flow_execution import perform
 from json_mapping import MappingError, ObjectDefinition, assemble, check_size
 from run_store import Run
@@ -41,6 +42,20 @@ def list_flows(request: Request, response: Response):
         rows = connection.execute(select(flows).where(
             flows.c.library == library.name).order_by(flows.c.name, flows.c.id)).mappings().all()
     return [serialize_flow(row, False) for row in rows]
+
+
+@router.post("/switch-fields/{node_id}")
+def switch_fields(node_id: str, graph: FlowGraph, request: Request):
+    nodes = {node.id: node for node in graph.nodes}
+    if node_id not in nodes or nodes[node_id].type != "switch":
+        raise HTTPException(422, "Select a Switch in this flow.")
+    incoming = {node.id: [] for node in graph.nodes}
+    for edge in graph.edges:
+        incoming[edge.target].append(edge)
+    try:
+        return FlowFields(nodes, incoming, graph_agents(library_for(request), graph)).output(node_id)
+    except MappingError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/{flow_id}")
@@ -83,5 +98,5 @@ async def run_flow(flow_id: UUID, body: FlowRun, request: Request):
         output = await perform(document, library, request.app.state.studio, body.input, run)
     except HTTPException as exc:
         raise HTTPException(exc.status_code, exc.detail, headers=headers) from exc
-    return JSONResponse(output, headers=headers) if isinstance(output, dict) else Response(
+    return JSONResponse(output, headers=headers) if not isinstance(output, str) else Response(
         content=output, media_type="text/plain", headers=headers)

@@ -7,9 +7,10 @@ export type AgentDefinition = {
   prompt: PromptReference | null;
   outputSchema: { fields: OutputField[] } | null;
   revision: number;
+  modelSelection?: { providerId: string; model: string } | null;
 };
 export type LibraryPrompt = PromptReference & { text: string };
-export type Catalog = { agents: AgentDefinition[]; prompts: LibraryPrompt[] };
+export type Catalog = { agents: AgentDefinition[]; prompts: LibraryPrompt[]; providers: { id: string; name: string }[] };
 
 declare global {
   interface Window {

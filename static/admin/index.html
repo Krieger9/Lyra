@@ -31,6 +31,9 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM9 11h6m-6 4h6"/></svg>
           <span class="nav-label">PromptStudio</span>
         </a>
+        <a href="/admin/models/" title="Models" aria-label="Models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4zM8 10h8"/></svg><span class="nav-label">Models</span></a>
+        <a href="/admin/model-groups/" title="Model groups" aria-label="Model groups"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h13v11H3zM7 19h13V8"/></svg><span class="nav-label">Model groups</span></a>
+        <a href="/admin/protocols/" title="Protocols" aria-label="Protocols"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5"/></svg><span class="nav-label">Protocols</span></a>
         <a href="/admin/providers/" title="Providers" aria-label="Providers">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4"/></svg>
           <span class="nav-label">Providers</span>
@@ -61,10 +64,10 @@
         <dt>Prompt library</dt><dd data-library></dd>
       </dl>
     </section>
-    <section id="providers-page" hidden aria-labelledby="provider-title">
-      <h2 id="provider-title">Ollama</h2>
-      <dl><dt>Active chat model</dt><dd data-model></dd></dl>
-    </section>
+    <section id="models-page" hidden aria-label="models"></section>
+    <section id="model-groups-page" hidden aria-label="model-groups"></section>
+    <section id="protocols-page" hidden aria-label="protocols"></section>
+    <section id="providers-page" hidden aria-label="providers"></section>
     <section id="flow-page" hidden aria-label="Flow editor">
       <div id="flow-editor"></div>
     </section>

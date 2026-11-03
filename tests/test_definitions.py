@@ -1,16 +1,21 @@
+import json
 import os
+from pathlib import Path
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, local
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import httpx
 from prompt_studio import PromptLibrary, SQLAlchemyStorage
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from agent_store import create_schema, definitions, metadata, seed_defaults
+from agent_store import definitions, metadata, seed_defaults
+from schema_migrations import apply_migrations, schema_transaction
 from app import app
 from auth import require_admin_access, require_chat_access, require_mcp_access
 
@@ -27,12 +32,16 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         self.storage.engine = self.engine.execution_options(schema_translate_map={
             "agent_studio": self.schema, "prompt_studio": self.schema,
         })
-        metadata.create_all(self.storage.engine)
+        metadata.tables["prompt_studio.prompt_versions"].create(self.storage.engine)
+        self.migrate()
         self.library = PromptLibrary(self.storage, "test")
         seed_defaults(self.library)
         self.library.add("instructions", "Be helpful.")
         self.library.add("request", "{{ request }}")
-        studio = SimpleNamespace(prompts=SimpleNamespace(library=self.library))
+        library_state = patch.object(app.state, "library", self.library, create=True)
+        library_state.start()
+        self.addCleanup(library_state.stop)
+        studio = SimpleNamespace()
         state = patch.object(app.state, "studio", studio, create=True)
         state.start()
         self.addCleanup(state.stop)
@@ -48,6 +57,10 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         with self.engine.begin() as connection:
             connection.execute(DropSchema(self.schema, cascade=True))
         self.engine.dispose()
+
+    def migrate(self):
+        with schema_transaction(self.storage.engine) as connection:
+            apply_migrations(connection)
 
     async def test_create_edit_and_pin_versions(self):
         created = await self.client.post("/api/admin/agents", json=self.body)
@@ -101,22 +114,56 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         catalog = (await self.client.get("/api/admin/catalog")).json()
         self.assertIsNone(catalog["agents"][0]["prompt"])
 
+    async def test_concurrent_prompt_defaults_create_one_version(self):
+        ready = Barrier(2)
+
+        def seed(text):
+            ready.wait(timeout=5)
+            return self.library.ensure_initial("chat", text)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first, second = pool.map(seed, ["first worker", "second worker"])
+        self.assertEqual(first.text, second.text)
+        self.assertEqual([v.version for v in self.library.list_versions("chat")], [1])
+
+    def test_concurrent_publishers_retry_the_same_postgres_version(self):
+        ready = Barrier(2)
+        worker = local()
+
+        def after_read(conn, cursor, statement, parameters, context, executemany):
+            if "SELECT max(" in statement and not getattr(worker, "read_latest", False):
+                worker.read_latest = True
+                ready.wait(timeout=5)
+
+        engine = self.storage.engine
+        event.listen(engine, "after_cursor_execute", after_read)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                published = list(pool.map(lambda text: self.library.add("chat", text), ["first", "second"]))
+        finally:
+            event.remove(engine, "after_cursor_execute", after_read)
+        self.assertEqual(sorted(v.version for v in published), [1, 2])
+        self.assertEqual({v.text for v in self.library.list_versions("chat")}, {"first", "second"})
+
     async def test_existing_schema_upgrades_without_changing_template_agents(self):
         created = (await self.client.post("/api/admin/agents", json=self.body)).json()
         table = self.schema + ".agent_definitions"
         with self.engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE {self.schema}.lyra_schema_migrations"))
             connection.execute(text(f"ALTER TABLE {table} DROP COLUMN output_schema"))
+            connection.execute(text(f"ALTER TABLE {table} DROP COLUMN provider_id, DROP COLUMN model_name"))
             connection.execute(text(f"ALTER TABLE {table} ALTER COLUMN prompt_name SET NOT NULL, "
                                     "ALTER COLUMN prompt_version SET NOT NULL"))
             connection.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT agent_prompt_reference_complete"))
-        create_schema(self.storage.engine)
-        create_schema(self.storage.engine)
+        self.migrate()
+        self.migrate()
         response = await self.client.post("/api/admin/agents", json={"name": "New raw agent"})
         self.assertEqual(response.status_code, 201, response.text)
         catalog = (await self.client.get("/api/admin/catalog")).json()
         old = next(agent for agent in catalog["agents"] if agent["id"] == created["id"])
         self.assertEqual(old["prompt"], self.body["prompt"])
         self.assertIsNone(old["outputSchema"])
+        self.assertIsNone(old["modelSelection"])
         with self.assertRaises(IntegrityError):
             with self.storage.engine.begin() as connection:
                 connection.execute(definitions.update().where(
@@ -129,6 +176,166 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "api-response", "type": "apiResponse", "position": {"x": 700, "y": 100}, "data": {"label": "API Response"}},
             ], "edges": [],
         }
+
+    async def test_provider_model_selection_for_agent_test_flow_and_pinned_chat(self):
+        mids = [(await self.client.post("/api/admin/models", json={"name": name})).json()["id"]
+                for name in ("small", "large:v2")]
+        group_body = {"name": "Local models", "modelIds": mids}
+        group = (await self.client.post("/api/admin/model-groups", json=group_body)).json()
+        provider_body = {"name": "Lab Ollama", "uri": "http://lab.test:11434", "groupId": group["id"]}
+        provider = (await self.client.post("/api/admin/providers", json=provider_body)).json()
+        catalog = (await self.client.get("/api/admin/catalog")).json()
+        self.assertEqual(catalog["modelGroups"], [group])
+        self.assertEqual(catalog["providers"], [provider])
+        choice = {"providerId": provider["id"], "model": "large:v2"}
+        agent = (await self.client.post("/api/admin/agents", json=self.body | {"modelSelection": choice})).json()
+        agent_url = "/api/admin/agents/" + agent["id"]
+        legacy = await self.client.put(agent_url, json=self.body | {"revision": 1})
+        self.assertEqual(legacy.json()["modelSelection"], choice)
+        for invalid in [choice | {"model": "unknown"}, choice | {"providerId": str(uuid4())}]:
+            self.assertEqual((await self.client.put(agent_url, json=self.body | {
+                "revision": 2, "modelSelection": invalid})).status_code, 422)
+        change = await self.client.put("/api/admin/model-groups/" + group["id"],
+            json=group_body | {"modelIds": mids[:1], "revision": 1})
+        self.assertEqual(change.status_code, 409)
+        other_group = (await self.client.post("/api/admin/model-groups",
+            json={"name": "Small only", "modelIds": mids[:1]})).json()
+        reassigned = await self.client.put("/api/admin/providers/" + provider["id"],
+            json=provider_body | {"groupId": other_group["id"], "revision": 1})
+        self.assertEqual(reassigned.status_code, 409)
+        app.state.studio.traces = Mock()
+        graph = self.flow_graph()
+        graph["nodes"].append({"type": "agent", "id": "worker", "position": {"x": 0, "y": 0},
+                               "data": {"definition": {"id": agent["id"]}}})
+        graph["edges"] = [{"id": "input", "source": "api-input", "target": "worker"},
+                          {"id": "reply", "source": "worker", "target": "api-response"}]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Selected model", "graph": graph})).json()
+        url = "/api/admin/flows/" + flow["id"]
+        self.assertEqual((await self.client.put("/api/admin/chat-flow/" + flow["id"],
+                                               json={"revision": 1})).status_code, 200)
+        updated = await self.client.put("/api/admin/providers/" + provider["id"],
+            json=provider_body | {"uri": "http://new.test:11434", "revision": 1})
+        self.assertEqual(updated.status_code, 200, updated.text)
+
+        async def complete(adapter, prompt):
+            return adapter.endpoint.uri + " " + adapter.model.id
+
+        async def observed(adapter, prompt, observe):
+            return await complete(adapter, prompt), None
+
+        with patch("model_adapter.MeteredOllamaAdapter.complete", complete), \
+             patch("model_adapter.MeteredOllamaAdapter.complete_observed", observed):
+            tested = await self.client.post(agent_url + "/test", json={"input": "hello"})
+            self.assertEqual(tested.json()["output"], "http://new.test:11434 large:v2")
+            run = await self.client.post(url + "/run", json={"input": "hello"})
+            self.assertEqual(run.text, "http://new.test:11434 large:v2")
+            with patch.dict(app.dependency_overrides, {require_chat_access: lambda: ["User.Chat"]}):
+                chat = await self.client.post("/api/chat", json={"message": "hello"})
+            self.assertEqual(chat.json()["reply"], "http://lab.test:11434 large:v2")
+        reset = await self.client.put(agent_url, json=self.body | {"revision": 2, "modelSelection": None})
+        self.assertIsNone(reset.json()["modelSelection"])
+
+    async def test_catalog_model_identity_protocol_and_membership(self):
+        base = "/api/admin/"
+        model = (await self.client.post(base + "models", json={"name": "first"})).json()
+        group = (await self.client.post(base + "model-groups", json={"name": "Group", "modelIds": [model["id"]]})).json()
+        extra = (await self.client.post(base + "models", json={"name": "second", "addToGroup": group["id"],
+                                                              "groupRevision": group["revision"]})).json()
+        stale = await self.client.post(base + "models", json={"name": "rolled-back", "addToGroup": group["id"],
+                                                              "groupRevision": group["revision"]})
+        self.assertEqual(stale.status_code, 409)
+        protocol = (await self.client.post(base + "protocols", json={"name": "Compatible", "adapter": "openai"})).json()
+        provider = (await self.client.post(base + "providers", json={"name": "Local", "uri": "http://local.test/v1",
+                          "groupId": group["id"], "protocolId": protocol["id"]})).json()
+        selection = {"providerId": provider["id"], "model": "first"}
+        agent = (await self.client.post(base + "agents", json=self.body | {"modelSelection": selection})).json()
+        renamed = await self.client.put(base + "models/" + model["id"], json={"name": "renamed", "revision": 1})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        catalog = (await self.client.get(base + "catalog")).json()
+        self.assertEqual(catalog["modelGroups"][0]["modelIds"], [model["id"], extra["id"]])
+        self.assertEqual(catalog["modelGroups"][0]["models"], ["renamed", "second"])
+        self.assertEqual(catalog["agents"][0]["modelSelection"]["model"], "renamed")
+        self.assertEqual(len(catalog["models"]), 2)
+        app.state.studio.traces = Mock()
+        with patch("model_adapter.ChatCompletionsAdapter.complete", new_callable=AsyncMock, return_value="compatible") as call:
+            run = await self.client.post(base + "agents/" + agent["id"] + "/test", json={"input": "hi"})
+            self.assertEqual(run.json()["output"], "compatible")
+            call.assert_awaited_once()
+        invalid = await self.client.post(base + "protocols", json={"name": "bad", "adapter": "missing"})
+        self.assertEqual(invalid.status_code, 422)
+
+    async def test_upgrade_existing_ollama_provider_and_group(self):
+        base = "/api/admin/"
+        model = (await self.client.post(base + "models", json={"name": "old-model"})).json()
+        group = (await self.client.post(base + "model-groups", json={"name": "Local models", "modelIds": [model["id"]]})).json()
+        await self.client.post(base + "providers", json={"name": "Local", "uri": "http://local.test", "groupId": group["id"]})
+        with self.storage.engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE {self.schema}.lyra_schema_migrations"))
+            connection.execute(text(f"ALTER TABLE {self.schema}.providers DROP COLUMN protocol_id"))
+            connection.execute(text(f"DROP TABLE {self.schema}.protocols"))
+            connection.execute(text(f"DROP TABLE {self.schema}.models"))
+        self.migrate()
+        self.migrate()
+        catalog = (await self.client.get(base + "catalog")).json()
+        self.assertEqual([row["name"] for row in catalog["models"]], ["old-model"])
+        self.assertEqual(catalog["modelGroups"][0]["modelIds"], [catalog["models"][0]["id"]])
+        native = next(p for p in catalog["protocols"] if p["adapter"] == "ollama")
+        self.assertEqual(catalog["providers"][0]["protocolId"], native["id"])
+
+    async def test_switch_picker_save_reopen_and_run_history(self):
+        schema = {"fields": [{"name": "category", "type": "choice", "required": False,
+                              "choices": ["chat", "task"]}, {"name": "reason", "type": "text"}]}
+        agent = (await self.client.post("/api/admin/agents", json=self.body | {"outputSchema": schema})).json()
+        graph = self.flow_graph()
+        graph["nodes"] += [
+            {"id": "agent", "type": "agent", "position": {"x": 1, "y": 0}, "data": {"definition": agent}},
+            {"id": "switch", "type": "switch", "position": {"x": 2, "y": 0}, "data": {"switchDefinition": {
+                "paths": [{"id": "chat-id", "label": "Conversation", "checks": [
+                    {"field": "/category", "operator": "equals", "value": "chat"}]}]}}},
+        ]
+        graph["edges"] = [{"id": "in", "source": "api-input", "target": "agent"},
+                          {"id": "classified", "source": "agent", "target": "switch"},
+                          *[{"id": port, "source": "switch", "sourceHandle": port, "target": "api-response"}
+                            for port in ("chat-id", "otherwise")]]
+        fields = await self.client.post("/api/admin/flows/switch-fields/switch", json=graph)
+        self.assertEqual(fields.json(), {"/category": ["chat", "task"], "/reason": []})
+        created = await self.client.post("/api/admin/flows", json={"name": "Router", "graph": graph})
+        self.assertEqual(created.status_code, 201, created.text)
+        url = "/api/admin/flows/" + created.json()["id"]
+        saved = (await self.client.get(url)).json()["graph"]
+        self.assertEqual([wire["sourceHandle"] for wire in saved["edges"][-2:]], ["chat-id", "otherwise"])
+        model = SimpleNamespace(complete=AsyncMock(return_value='{"reason":"No category"}'))
+        app.state.studio.model, app.state.studio.traces = model, Mock()
+        result = await self.client.post(url + "/run", json={"input": "hello"})
+        self.assertEqual(result.json(), {"reason": "No category"})
+        run = (await self.client.get("/api/admin/runs/" + result.headers["X-Lyra-Run-Id"])).json()
+        decision = next(e for e in run["events"] if e["kind"] == "switch.selected")
+        self.assertEqual(decision["data"]["path"], "otherwise")
+        schema["fields"][0]["choices"] = ["other", "task"]
+        updated = await self.client.put("/api/admin/agents/" + agent["id"],
+                                       json=self.body | {"revision": 1, "outputSchema": schema})
+        self.assertEqual(updated.status_code, 200, updated.text)
+        invalid = await self.client.post(url + "/run", json={"input": "hello"})
+        self.assertEqual(invalid.status_code, 422)
+        self.assertIn("no longer an available choice", invalid.json()["detail"])
+        model.complete.assert_awaited_once()
+
+    async def test_chat_runs_preexisting_snapshot_without_current_agent_definitions(self):
+        from run_store import active
+
+        fixture = Path(__file__).with_name("fixtures") / "router-snapshot.json"
+        saved = json.loads(fixture.read_text(encoding="utf-8"))
+        with self.storage.engine.begin() as conn:
+            conn.execute(active.insert().values(library=self.library.name, snapshot=saved))
+        model = SimpleNamespace(complete=AsyncMock(return_value='{"category":"chat","reason":"fixture"}'))
+        app.state.studio.model, app.state.studio.traces = model, Mock()
+        with patch.dict(app.dependency_overrides, {require_chat_access: lambda: ["User.Chat"]}):
+            reply = await self.client.post("/api/chat", json={"message": "hello"})
+        self.assertEqual(reply.status_code, 200, reply.text)
+        self.assertEqual(reply.json()["reply"]["category"], "chat")
+        run = (await self.client.get("/api/admin/runs/" + reply.headers["X-Lyra-Run-Id"])).json()
+        self.assertEqual(run["snapshot"], saved)
+        self.assertEqual(next(e["data"]["path"] for e in run["events"] if e["kind"] == "switch.selected"), "chat-id")
 
     async def test_debug_export_and_chat_pin_the_executed_graph(self):
         from mcp import ClientSession

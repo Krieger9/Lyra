@@ -61,6 +61,13 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .agent-icon svg { width: 23px; height: 23px; }
 .json-card { display: flex; align-items: center; gap: 10px; background: #fffaf0; border-color: #cbb06e; }
 .json-icon { flex: none; font: bold 22px Consolas, monospace; color: #87621d; }
+.switch-card { background: #f0f8fb; border-color: #80acbc; }
+.switch-port { position: relative; margin: 6px -16px 0 0; padding: 4px 16px 2px 0; border-top: 1px solid #ccdde2; font-size: 12px; }
+.switch-inspector fieldset { min-width: 0; margin: 10px 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.switch-inspector input { margin-bottom: 8px; }
+.switch-check { margin: 10px 0; padding-block: 8px; border-top: 1px solid var(--line); }
+.switch-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.trace-skipped { color: #676575; background: #f0eff3; border-style: dashed; }
 .flow-input .connection-id { flex-basis: 100%; margin: 0; font-size: 11px; }
 .wire-settings { width: 100%; margin-bottom: 10px; }
 .wire-settings form { display: flex; align-items: end; gap: 6px; flex-wrap: wrap; }

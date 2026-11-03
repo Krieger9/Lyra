@@ -1,13 +1,14 @@
 """Durable execution evidence. The graph, definitions and events belong to the run."""
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import JSONB, insert
 
 from agent_store import metadata
+from flow_graph import FlowSnapshot
 
 RUN_TIMEOUT = 120
 runs = Table("flow_runs", metadata,
@@ -32,7 +33,7 @@ def utcnow():
 
 
 class Run:
-    def __init__(self, library, document, source):
+    def __init__(self, library, document: FlowSnapshot, source):
         self.engine = library.storage.engine
         self.id = uuid4()
         self.started = perf_counter()
@@ -42,8 +43,9 @@ class Run:
             cutoff = utcnow() - timedelta(seconds=RUN_TIMEOUT + 60)
             conn.execute(runs.update().where(runs.c.library == library.name, runs.c.status == "running",
                 runs.c.started_at < cutoff).values(status="interrupted", error="Execution worker stopped."))
-            conn.execute(runs.insert().values(id=self.id, library=library.name, flow_id=UUID(document["id"]),
-                revision=document["revision"], snapshot=document, source=source, status="running", started_at=utcnow()))
+            conn.execute(runs.insert().values(id=self.id, library=library.name, flow_id=document.id,
+                revision=document.revision, snapshot=document.model_dump(mode="json", exclude_unset=True),
+                source=source, status="running", started_at=utcnow()))
 
     def _append(self, conn, kind, data):
         self.seq += 1
@@ -64,15 +66,17 @@ class Run:
                 status=status, finished_at=utcnow(), error=error, result=result))
 
 
-def activation(library):
+def activation(library) -> FlowSnapshot | None:
     with library.storage.engine.connect() as conn:
-        return conn.execute(select(active.c.snapshot).where(active.c.library == library.name)).scalar_one_or_none()
+        saved = conn.execute(select(active.c.snapshot).where(active.c.library == library.name)).scalar_one_or_none()
+        return FlowSnapshot.model_validate(saved) if saved is not None else None
 
 
-def activate(library, document):
+def activate(library, document: FlowSnapshot):
+    saved = document.model_dump(mode="json", exclude_unset=True)
     with library.storage.engine.begin() as conn:
-        conn.execute(insert(active).values(library=library.name, snapshot=document).on_conflict_do_update(
-            index_elements=[active.c.library], set_={"snapshot": document}))
+        conn.execute(insert(active).values(library=library.name, snapshot=saved).on_conflict_do_update(
+            index_elements=[active.c.library], set_={"snapshot": saved}))
 
 
 def deactivate(library, flow_id, revision):

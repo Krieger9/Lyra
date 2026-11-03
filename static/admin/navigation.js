@@ -4,6 +4,9 @@ const sections = {
   "/admin/prompts/": "PromptStudio",
   "/admin/flow/": "Flow View",
   "/admin/providers/": "Providers",
+  "/admin/models/": "Models",
+  "/admin/model-groups/": "Model groups",
+  "/admin/protocols/": "Protocols",
 };
 
 function adminUrl(value) {
@@ -57,12 +60,22 @@ export function returnWithSelection(saved, kind) {
     const field = query.get("field");
     if (field === "instructions" || field === "prompt") {
       draft[field] = JSON.stringify([saved.name, saved.version]);
-      sessionStorage.setItem(storageKey(id), JSON.stringify(draft));
     }
   }
   if (draft && kind === "agent" && destination.pathname === "/admin/flow/") {
     draft.items = draft.items.map(node => node.type === "agent" && node.id === query.get("node")
       ? { ...node, data: { label: saved.name, definition: saved } } : node);
+  }
+  if (draft) {
+    if (destination.pathname === "/admin/model-groups/" && kind === "model") {
+      draft.modelIds = [...new Set([...(draft.modelIds || []), saved.id])];
+    } else if (destination.pathname === "/admin/providers/") {
+      if (kind === "model group") draft.groupId = saved.id;
+      if (kind === "protocol") draft.protocolId = saved.id;
+    } else if (destination.pathname === "/admin/agents/") {
+      if (kind === "provider") draft.providerId = saved.id;
+      if (kind === "model") { draft.modelId = saved.id; draft.model = saved.name; }
+    }
     sessionStorage.setItem(storageKey(id), JSON.stringify(draft));
   }
   location.replace(relativeUrl(destination));
@@ -83,7 +96,7 @@ export function renderBreadcrumbs() {
     for (const key of ["new", "id", "name", "draft", "saved"]) listUrl.searchParams.delete(key);
     crumbs.push({ title: sections[url.pathname], href: editor ? relativeUrl(listUrl) : relativeUrl(url) });
     if (editor) {
-      const noun = url.pathname === "/admin/agents/" ? "agent" : "prompt";
+      const noun = sections[url.pathname] === "PromptStudio" ? "prompt" : sections[url.pathname].slice(0, -1).toLowerCase();
       crumbs.push({ title: (url.searchParams.has("new") ? "Create " : "Edit ") + noun, href: relativeUrl(url) });
     }
   }

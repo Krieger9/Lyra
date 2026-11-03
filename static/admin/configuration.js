@@ -24,14 +24,21 @@ export async function mountConfiguration(page) {
       <label for="definition-name">Name</label>
       <input id="definition-name" required autocomplete="off">
       <div class="agent-fields" hidden>
+        <label for="agent-provider">Provider</label>
+        <select id="agent-provider"></select>
+        <label for="agent-model">Model</label>
+        <select id="agent-model"></select>
+        <div id="agent-model-links"></div>
         <label for="instructions">System instructions</label>
         <select id="instructions" required></select>
         <a id="create-instructions" href="/admin/prompts/?new=1">Create instructions in PromptStudio</a>
+        <a id="edit-instructions">Edit selected instructions</a>
         <pre id="instructions-preview"></pre>
         <label for="prompt">Prompt</label>
         <select id="prompt" required></select>
         <p>Use raw user input to pass incoming flow text directly, or select a template to format it.</p>
         <a id="create-prompt" href="/admin/prompts/?new=1">Create a prompt in PromptStudio</a>
+        <a id="edit-prompt">Edit selected prompt</a>
         <pre id="prompt-preview"></pre>
         <button id="refresh-library" type="button">Refresh prompt library</button>
         <section id="agent-output"></section>
@@ -62,6 +69,8 @@ export async function mountConfiguration(page) {
   const status = host.querySelector(".configuration-status");
   const name = host.querySelector("#definition-name");
   const instructions = host.querySelector("#instructions");
+  const provider = host.querySelector("#agent-provider");
+  const model = host.querySelector("#agent-model");
   const prompt = host.querySelector("#prompt");
   const text = host.querySelector("#prompt-text");
   const save = form.querySelector('[type="submit"]');
@@ -97,6 +106,8 @@ export async function mountConfiguration(page) {
   if (!isEditor) return;
   if (query.has("id")) editing = catalog.agents.find(entry => entry.id === query.get("id"));
   if (query.has("name")) editing = entries.find(entry => entry.name === query.get("name"));
+  if (!agentsPage && query.has("version")) editing = catalog.prompts.find(entry =>
+    entry.name === query.get("name") && entry.version === Number(query.get("version")));
   if (!query.has("new") && !editing) {
     status.textContent = "This definition could not be found. Return to the list.";
     return;
@@ -119,6 +130,47 @@ export async function mountConfiguration(page) {
     host.querySelector("#" + field + "-preview").textContent = field === "prompt" && select.value === RAW_INPUT
       ? "Incoming flow text is used directly."
       : entry?.text ?? "";
+    const edit = host.querySelector("#edit-" + field);
+    edit.hidden = !entry;
+    if (entry) edit.href = linkWithReturn("/admin/prompts/?" + new URLSearchParams({
+      name: entry.name, version: entry.version,
+    }), { field });
+  }
+
+  function modelLinks() {
+    const links = host.querySelector("#agent-model-links");
+    links.replaceChildren();
+    const add = (label, page, params) => {
+      const anchor = document.createElement("a");
+      anchor.textContent = label;
+      anchor.href = linkWithReturn("/admin/" + page + "/?" + new URLSearchParams(params));
+      links.append(anchor, " ");
+    };
+    add("Create provider", "providers", {new: 1});
+    const selected = catalog.providers.find(p => p.id === provider.value);
+    if (!selected) return;
+    add("Edit selected provider", "providers", {id: selected.id});
+    add("Create model in provider group", "models", {new: 1, addToGroup: selected.groupId});
+    const current = catalog.models.find(m => m.name === model.value);
+    if (current) add("Edit selected model", "models", {id: current.id});
+    add("Edit provider’s model group", "model-groups", {id: selected.groupId});
+  }
+
+  function populateModels(previous) {
+    const selected = catalog.providers.find(row => row.id === provider.value);
+    const group = catalog.modelGroups.find(row => row.id === selected?.groupId);
+    model.disabled = !provider.value;
+    model.required = Boolean(provider.value);
+    model.replaceChildren(option("", selected ? "Choose from " + group.name + "…" : "Default chat model"),
+      ...(group?.models ?? []).map(value => option(value, value)));
+    model.value = group?.models.includes(previous) ? previous : "";
+    modelLinks();
+  }
+
+  function populateProviders(id, selectedModel) {
+    provider.replaceChildren(option("", "Use default chat model"), ...catalog.providers.map(row => option(row.id, row.name)));
+    provider.value = id || "";
+    populateModels(selectedModel);
   }
 
   let selectionsInitialized = false;
@@ -145,6 +197,8 @@ export async function mountConfiguration(page) {
     draft.save({
       name: name.value, instructions: instructions.value, prompt: prompt.value, text: text.value,
       revision: editing?.revision,
+      providerId: provider.value, model: model.value,
+      modelId: catalog.models.find(m => m.name === model.value)?.id,
       outputSchema: readOutput?.(),
     });
   }
@@ -155,6 +209,10 @@ export async function mountConfiguration(page) {
       ? draft.data.outputSchema : editing?.outputSchema, persistDraft);
     if (query.get("focus") === "output") output.querySelector("select").focus();
     populatePrompts();
+    populateProviders(draft.data?.providerId ?? editing?.modelSelection?.providerId,
+                      catalog.models.find(m => m.id === draft.data?.modelId)?.name ?? draft.data?.model ?? editing?.modelSelection?.model);
+    provider.addEventListener("change", () => populateModels(""));
+    model.addEventListener("change", modelLinks);
     for (const field of ["instructions", "prompt"]) {
       const link = host.querySelector("#create-" + field);
       link.href = linkWithReturn("/admin/prompts/?new=1", { field });
@@ -166,6 +224,7 @@ export async function mountConfiguration(page) {
       try {
         catalog = await request("/api/admin/catalog");
         populatePrompts();
+        populateProviders(provider.value, model.value);
         status.textContent = "Prompt library refreshed.";
       } catch (error) { status.textContent = error.message; }
     }
@@ -190,6 +249,7 @@ export async function mountConfiguration(page) {
           return { name, version };
         };
         payload = { name: name.value, instructions: ref(instructions), prompt: ref(prompt), outputSchema: readOutput(true) };
+        payload.modelSelection = provider.value ? { providerId: provider.value, model: model.value } : null;
         endpoint = "/api/admin/agents";
         if (editing) {
           endpoint += "/" + editing.id;

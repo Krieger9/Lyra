@@ -13,16 +13,17 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-from prompt_studio import NotFoundError, PromptLibrary, SQLAlchemyStorage
+from prompt_studio import PromptLibrary, SQLAlchemyStorage
 from pydantic import BaseModel, Field, JsonValue, StringConstraints
 
 from auth import require_admin_access, require_chat_access, settings
 from agent_definitions import router as definitions_router
-from agent_store import create_schema as create_agent_schema, seed_defaults
+from providers import router as providers_router
+from agent_store import seed_defaults
+from schema_migrations import apply_migrations, schema_transaction
 from flows import router as flows_router
-from flow_graph import flows
 from flow_execution import perform
-from run_store import Run, activation, active, runs, events
+from run_store import Run, activation
 from run_api import router as run_router
 from run_mcp import install_mcp
 from model_adapter import MeteredOllamaAdapter
@@ -78,17 +79,15 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Set DATABASE_URL in .env to the Lyra PostgreSQL database")
     storage = SQLAlchemyStorage.from_postgres_url(os.environ["DATABASE_URL"])
     try:
-        storage.create_schema()
         traces = PostgresTraceAdapter(storage.engine)
-        traces.create_schema()
-        create_agent_schema(storage.engine)
-        flows.metadata.create_all(storage.engine, tables=[flows, runs, events, active])
+        with schema_transaction(storage.engine) as connection:
+            storage.create_schema()
+            traces.create_schema()
+            apply_migrations(connection)
         library = PromptLibrary(storage, name="lyra")
         seed_defaults(library)
-        try:
-            library.get(PROMPT)
-        except NotFoundError:
-            library.add(PROMPT, TEMPLATE)
+        library.ensure_initial(PROMPT, TEMPLATE)
+        app.state.library = library
 
         model = Model(os.getenv("OLLAMA_MODEL", DEFAULT_MODEL))
         endpoint = Endpoint(
@@ -107,6 +106,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Lyra Chat", lifespan=lifespan)
 app.include_router(definitions_router)
+app.include_router(providers_router)
 app.include_router(flows_router)
 app.include_router(run_router)
 mcp_server = install_mcp(app)
@@ -132,11 +132,14 @@ def spa_callback():
 def admin_home(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     studio = request.app.state.studio
-    return {"prompt_library": studio.prompts.library.name, "chat_model": studio.model.model.id,
+    return {"prompt_library": request.app.state.library.name, "chat_model": studio.model.model.id,
             "ui_version": ui_version()}
 
 
 @app.get("/admin/providers/", include_in_schema=False)
+@app.get("/admin/models/", include_in_schema=False)
+@app.get("/admin/model-groups/", include_in_schema=False)
+@app.get("/admin/protocols/", include_in_schema=False)
 @app.get("/admin/", include_in_schema=False)
 @app.get("/admin/flow/", include_in_schema=False)
 @app.get("/admin/agents/", include_in_schema=False)
@@ -168,20 +171,20 @@ def msal_bridge():
 @app.post("/api/chat", response_model=ChatReply, dependencies=[Depends(require_chat_access)])
 async def chat(body: ChatRequest, request: Request, response: Response):
     studio = request.app.state.studio
-    library = studio.prompts.library
+    library = request.app.state.library
     document = activation(library)
     if document:
         run = Run(library, document, "chat")
         response.headers["X-Lyra-Run-Id"] = str(run.id)
-        response.headers["X-Lyra-Flow-Id"] = document["id"]
+        response.headers["X-Lyra-Flow-Id"] = str(document.id)
         try:
             reply = await perform(document, library, studio, body.message, run)
         except HTTPException as exc:
             raise HTTPException(exc.status_code, "Chat flow failed. An administrator can inspect the run.",
-                                headers={"X-Lyra-Run-Id": str(run.id), "X-Lyra-Flow-Id": document["id"]}) from exc
+                                headers={"X-Lyra-Run-Id": str(run.id), "X-Lyra-Flow-Id": str(document.id)}) from exc
         return ChatReply(reply=reply)
     try:
-        reply = await request.app.state.studio.run(
+        reply = await studio.run(
             body.message, prompt=PROMPT,
             parameters={"history": [turn.model_dump() for turn in body.history]},
         )

@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from json_mapping import json_text
 from output_contract import OutputSchema
+from model_adapter import provider_model
 
 
 class AgentPrompts:
@@ -61,8 +62,12 @@ class LinkedTrace:
 
 async def run_agent(library, studio, definition, value, observe=None):
     schema = OutputSchema.model_validate(definition["outputSchema"]) if definition["outputSchema"] else None
+    if selection := definition.get("modelSelection"):
+        model = provider_model(definition["endpoint"], selection["model"])
+    else:
+        model = studio.model
     runner = AgentStudio(AgentPrompts(library, definition, schema, observe),
-                         ObservedModel(studio.model, observe) if observe else studio.model,
+                         ObservedModel(model, observe) if observe else model,
                          LinkedTrace(studio.traces, observe) if observe else studio.traces)
     result = await runner.run(value if isinstance(value, str) else json_text(value), prompt=definition["name"])
     if not isinstance(result, str):

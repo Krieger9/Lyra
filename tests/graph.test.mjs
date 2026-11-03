@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { allowsConnection, graphDocument, hydrateGraph } from "../flow-editor/graph.ts";
+
+const snapshot = JSON.parse(readFileSync(new URL("./fixtures/router-snapshot.json", import.meta.url)));
+const catalog = Object.values(snapshot.agents);
+
+test("reopen and save the captured router without losing wire IDs, ports or agent references", () => {
+  const { nodes, wires } = hydrateGraph(snapshot.graph, catalog);
+  const save = (nodes, wires) => graphDocument(nodes, wires, snapshot.graph.viewport, snapshot.graph.panelSize);
+  const saved = save(nodes, wires);
+  assert.deepEqual(saved.nodes.find(n => n.type === "agent").data.definition, { id: catalog[0].id });
+  assert.deepEqual(saved.nodes.find(n => n.type === "switch").data.switchDefinition,
+    snapshot.graph.nodes.find(n => n.type === "switch").data.switchDefinition);
+  assert.deepEqual(saved.edges.map(e => [e.id, e.source, e.target, e.sourceHandle ?? null]),
+    snapshot.graph.edges.map(e => [e.id, e.source, e.target, e.sourceHandle]));
+  assert.deepEqual(saved.edges.map(e => e.name), ["input1", "input1", "input1", "input2"]);
+  const reopened = hydrateGraph(saved, catalog);
+  assert.deepEqual(save(reopened.nodes, reopened.wires), saved);
+});
+
+test("switch wires require a valid port and only the wire being replaced is exempt from duplicate checks", () => {
+  const { nodes, wires } = hydrateGraph(snapshot.graph, catalog);
+  const wire = wires.find(e => e.sourceHandle === "chat-id");
+  assert.equal(allowsConnection(nodes, wires, wire), false);
+  assert.equal(allowsConnection(nodes, wires, wire, wire.id), true);
+  assert.equal(allowsConnection(nodes, wires, { ...wire, sourceHandle: "deleted" }, wire.id), false);
+  assert.equal(allowsConnection(nodes, wires, { source: "agent", target: "switch" }), false);
+});

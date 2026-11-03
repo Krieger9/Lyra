@@ -1,0 +1,162 @@
+{
+  "id": "d2dfb40c-b561-4e67-abea-9826f52c7d05",
+  "name": "Router",
+  "graph": {
+    "edges": [
+      {
+        "id": "in",
+        "name": null,
+        "readAs": "value",
+        "source": "api-input",
+        "target": "agent",
+        "sourceHandle": null
+      },
+      {
+        "id": "classified",
+        "name": null,
+        "readAs": "value",
+        "source": "agent",
+        "target": "switch",
+        "sourceHandle": null
+      },
+      {
+        "id": "chat-id",
+        "name": null,
+        "readAs": "value",
+        "source": "switch",
+        "target": "api-response",
+        "sourceHandle": "chat-id"
+      },
+      {
+        "id": "otherwise",
+        "name": null,
+        "readAs": "value",
+        "source": "switch",
+        "target": "api-response",
+        "sourceHandle": "otherwise"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "api-input",
+        "data": {
+          "label": "API Input",
+          "definition": null,
+          "objectDefinition": null,
+          "switchDefinition": null
+        },
+        "type": "apiInput",
+        "position": {
+          "x": 100.0,
+          "y": 100.0
+        }
+      },
+      {
+        "id": "api-response",
+        "data": {
+          "label": "API Response",
+          "definition": null,
+          "objectDefinition": null,
+          "switchDefinition": null
+        },
+        "type": "apiResponse",
+        "position": {
+          "x": 700.0,
+          "y": 100.0
+        }
+      },
+      {
+        "id": "agent",
+        "data": {
+          "label": "",
+          "definition": {
+            "id": "d602058c-59d7-4a4c-8281-5b5f6c36620a"
+          },
+          "objectDefinition": null,
+          "switchDefinition": null
+        },
+        "type": "agent",
+        "position": {
+          "x": 1.0,
+          "y": 0.0
+        }
+      },
+      {
+        "id": "switch",
+        "data": {
+          "label": "",
+          "definition": null,
+          "objectDefinition": null,
+          "switchDefinition": {
+            "paths": [
+              {
+                "id": "chat-id",
+                "label": "Conversation",
+                "match": "all",
+                "checks": [
+                  {
+                    "field": "/category",
+                    "value": "chat",
+                    "operator": "equals"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "type": "switch",
+        "position": {
+          "x": 2.0,
+          "y": 0.0
+        }
+      }
+    ],
+    "viewport": {
+      "x": 0.0,
+      "y": 0.0,
+      "zoom": 1.0
+    },
+    "panelSize": {
+      "width": 280.0,
+      "height": 240.0
+    }
+  },
+  "agents": {
+    "d602058c-59d7-4a4c-8281-5b5f6c36620a": {
+      "id": "d602058c-59d7-4a4c-8281-5b5f6c36620a",
+      "name": "Planner",
+      "prompt": {
+        "name": "request",
+        "version": 1
+      },
+      "revision": 1,
+      "instructions": {
+        "name": "instructions",
+        "version": 1
+      },
+      "outputSchema": {
+        "fields": [
+          {
+            "name": "category",
+            "type": "choice",
+            "choices": [
+              "chat",
+              "task"
+            ],
+            "required": false,
+            "description": ""
+          },
+          {
+            "name": "reason",
+            "type": "text",
+            "choices": [],
+            "required": true,
+            "description": ""
+          }
+        ]
+      },
+      "modelSelection": null
+    }
+  },
+  "revision": 1
+}

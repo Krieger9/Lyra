@@ -35,6 +35,9 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.studio = studio.start()
         self.studio.run.return_value = "hello"
         self.addCleanup(studio.stop)
+        library_state = patch.object(app.state, "library", create=True)
+        self.library = library_state.start()
+        self.addCleanup(library_state.stop)
         binding = patch("app.activation", return_value=None)
         binding.start()
         self.addCleanup(binding.stop)
@@ -59,7 +62,7 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         for scope, role in [("access-as-user", "User.Admin"), ("access-as-admin", "User.Chat")]:
             response = await self.browser.get("/api/admin/home", headers=self.headers(scp=scope, roles=[role]))
             self.assertEqual(response.status_code, 403)
-        self.studio.prompts.library.name = "lyra"
+        self.library.name = "lyra"
         self.studio.model.model.id = "test-model"
         response = await self.browser.get("/api/admin/home", headers=self.headers(scp="access-as-admin", roles=["User.Admin"]))
         self.assertEqual(response.status_code, 200)
@@ -69,7 +72,8 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(home["ui_version"], r"^[a-f0-9]{16}$")
 
     async def test_admin_assets_are_versioned_and_revalidated(self):
-        for path in ("/admin/", "/admin/flow/", "/admin/agents/", "/admin/prompts/"):
+        for path in ("/admin/", "/admin/flow/", "/admin/agents/", "/admin/prompts/",
+                     "/admin/models/", "/admin/model-groups/", "/admin/protocols/", "/admin/providers/"):
             response = await self.browser.get(path)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["cache-control"], "no-cache")
@@ -86,6 +90,14 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             ("PUT", "/api/admin/chat-flow/" + str(uuid4())),
             ("DELETE", "/api/admin/chat-flow/" + str(uuid4())),
             ("GET", "/api/admin/catalog"),
+            ("POST", "/api/admin/models"),
+            ("PUT", "/api/admin/models/" + str(uuid4())),
+            ("POST", "/api/admin/protocols"),
+            ("PUT", "/api/admin/protocols/" + str(uuid4())),
+            ("POST", "/api/admin/model-groups"),
+            ("PUT", "/api/admin/model-groups/" + str(uuid4())),
+            ("POST", "/api/admin/providers"),
+            ("PUT", "/api/admin/providers/" + str(uuid4())),
             ("POST", "/api/admin/agents"),
             ("POST", "/api/admin/agents/" + str(uuid4()) + "/test"),
             ("PUT", "/api/admin/agents/" + str(uuid4())),

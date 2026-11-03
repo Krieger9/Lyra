@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field, JsonValue, field_validator, model_validat
 from sqlalchemy import Column, DateTime, Integer, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import JSONB
 
-from agent_store import Name, definitions, metadata, serialize_agent
-from json_mapping import ObjectDefinition, check_size
+from agent_store import AgentDefinition, Name, PromptReference, execution_agents, metadata
+from flow_switch import SwitchDefinition
+from json_mapping import MappingError, ObjectDefinition, check_size
 
 flows = Table(
     "flows", metadata,
@@ -43,11 +44,12 @@ class NodeData(BaseModel):
     label: str = Field(default="", max_length=120)
     definition: AgentReference | None = None
     objectDefinition: ObjectDefinition | None = None
+    switchDefinition: SwitchDefinition | None = None
 
 
 class FlowNode(BaseModel):
     id: str = Field(min_length=1, max_length=80)
-    type: Literal["apiInput", "apiResponse", "agent", "json", "item"]
+    type: Literal["apiInput", "apiResponse", "agent", "json", "item", "switch"]
     position: Position
     data: NodeData
 
@@ -55,6 +57,7 @@ class FlowNode(BaseModel):
 class FlowEdge(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     source: str
+    sourceHandle: str | None = Field(default=None, max_length=80)
     target: str
     name: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
     readAs: Literal["value", "json"] = "value"
@@ -67,6 +70,25 @@ class Viewport(Position):
 class PanelSize(BaseModel):
     width: float = Field(ge=0, le=10000)
     height: float = Field(ge=0, le=10000)
+
+
+def path_requirements(node, parents, requirements):
+    """A usable wire requires all upstream Switch decisions on its path."""
+    guards = []
+    combined = {}
+    for edge in parents:
+        guard = requirements[edge.source].copy()
+        if edge.sourceHandle is not None:
+            guard[edge.source] = edge.sourceHandle
+        if node.type == "apiResponse":
+            for previous in guards:
+                if not any(k in previous and previous[k] != v for k, v in guard.items()):
+                    raise MappingError("API Response inputs must come from mutually exclusive Switch paths.")
+        elif any(k in combined and combined[k] != v for k, v in guard.items()):
+            raise MappingError(f"{node.data.label} requires inputs from mutually exclusive Switch paths.")
+        combined.update(guard)
+        guards.append(guard)
+    return combined
 
 
 class FlowGraph(BaseModel):
@@ -87,7 +109,7 @@ class FlowGraph(BaseModel):
         seen = set()
         ids = set()
         names = set()
-        response_inputs = 0
+        switch_inputs = set()
         for edge in self.edges:
             if edge.name:
                 key = (edge.target, edge.name)
@@ -99,18 +121,43 @@ class FlowGraph(BaseModel):
             source, target = nodes[edge.source], nodes[edge.target]
             if edge.readAs == "json" and target.type != "json":
                 raise ValueError("Read as JSON applies to a JSON node's incoming wires")
-            allowed = source.type in ("apiInput", "agent", "json") and target.type in ("agent", "json")
-            allowed = allowed or (source.type in ("agent", "json") and target.type == "apiResponse")
+            allowed = source.type in ("apiInput", "agent", "json", "switch") and target.type in ("agent", "json", "switch")
+            allowed = allowed or (source.type in ("agent", "json", "switch") and target.type == "apiResponse")
             if not allowed:
                 raise ValueError("This connection is not supported")
-            if edge.id in ids or (edge.source, edge.target) in seen:
+            if source.type == "switch":
+                paths = source.data.switchDefinition.paths if source.data.switchDefinition else []
+                if edge.sourceHandle not in {"otherwise", *(p.id for p in paths)}:
+                    raise ValueError("Select an existing Switch path for this wire.")
+            elif edge.sourceHandle is not None:
+                raise ValueError("Only Switch outputs have named ports.")
+            if target.type == "switch":
+                if target.id in switch_inputs:
+                    raise ValueError("A Switch accepts one input.")
+                switch_inputs.add(target.id)
+            connection = (source.id, edge.sourceHandle, target.id)
+            if edge.id in ids or connection in seen:
                 raise ValueError("Duplicate connection")
             ids.add(edge.id)
-            seen.add((edge.source, edge.target))
-            if target.type == "apiResponse":
-                response_inputs += 1
-        if response_inputs > 1:
-            raise ValueError("API Response accepts one output")
+            seen.add(connection)
+        incoming = {key: [] for key in nodes}
+        for edge in self.edges:
+            incoming[edge.target].append(edge)
+        if len(incoming["api-response"]) > 1:
+            requirements = {}
+            visiting = set()
+
+            def visit(key):
+                if key in visiting:
+                    raise ValueError("Remove cycles before connecting multiple API Response inputs.")
+                if key not in requirements:
+                    visiting.add(key)
+                    for parent in incoming[key]:
+                        visit(parent.source)
+                    requirements[key] = path_requirements(nodes[key], incoming[key], requirements)
+                    visiting.remove(key)
+
+            visit("api-response")
         return self
 
 
@@ -152,15 +199,43 @@ def load_flow(library, flow_id):
     return row
 
 
-def snapshot(library, flow_id, revision=None):
+class SavedEndpoint(BaseModel):
+    uri: str
+    provider: str
+    group: str
+    models: list[str]
+    adapter: str = "ollama"  # Snapshots from before the protocol catalog used native Ollama.
+
+
+class SavedAgent(AgentDefinition):
+    id: UUID
+    revision: int
+    instructions: PromptReference
+    endpoint: SavedEndpoint | None = None
+
+
+class FlowSnapshot(BaseModel):
+    id: UUID
+    name: str
+    revision: int
+    graph: FlowGraph
+    agents: dict[str, SavedAgent]
+
+    def agent_definitions(self):
+        return {key: agent.model_dump(mode="json") for key, agent in self.agents.items()}
+
+
+def snapshot(library, flow_id, revision=None) -> FlowSnapshot:
     row = load_flow(library, flow_id)
     if revision is not None and row["revision"] != revision:
         raise HTTPException(409, "This flow changed. Reopen the saved revision before running or activating it.")
-    document = serialize_flow(row)
-    ids = [node.data.definition.id for node in FlowGraph.model_validate(row["graph"]).nodes
+    graph = FlowGraph.model_validate(row["graph"])
+    return FlowSnapshot(**serialize_flow(row, include_graph=False), graph=graph,
+                        agents=graph_agents(library, graph))
+
+
+def graph_agents(library, graph):
+    ids = [node.data.definition.id for node in graph.nodes
            if node.type == "agent" and node.data.definition]
     with library.storage.engine.connect() as conn:
-        rows = conn.execute(select(definitions).where(definitions.c.library == library.name,
-                                                     definitions.c.id.in_(ids))).mappings()
-        document["agents"] = {str(agent["id"]): serialize_agent(agent) for agent in rows}
-    return document
+        return execution_agents(conn, library, ids)

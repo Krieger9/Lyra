@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Background, Controls, Position, ReactFlow, ReactFlowProvider, type Edge, type Node } from "@xyflow/react";
+import type { SwitchDefinition } from "./switch";
+import { otherwise } from "./graph";
 
-type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string } }[];
+type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string; switchDefinition?: SwitchDefinition | null } }[];
   edges: (Edge & { name?: string | null })[] };
 type Document = { id: string; name: string; revision: number; graph: Graph };
 type Entry = { seq: number; node: string | null; kind: string; at: string; elapsed_ms: number; data: Record<string, unknown> };
@@ -16,6 +18,8 @@ const message = (failure: unknown) => failure instanceof Error ? failure.message
 function eventLabel(event: Entry) {
   const data = event.data;
   switch (event.kind) {
+    case "switch.selected": return `Selected path · ${data.label}`;
+    case "node.skipped": return "Skipped · inactive input path";
     case "gate.evaluated": return `${data.passed ? "Pass" : "Fail"} · ${data.field ?? "output"} · ${data.operation}`;
     case "mapping.applied": return `${data.source} → ${data.target}`;
     case "template.started": return `Render ${data.part} template`;
@@ -23,8 +27,8 @@ function eventLabel(event: Entry) {
     case "schema.inserted": return "Insert output schema";
     case "model.request": return "Send rendered prompt";
     case "model.response": return `Model reply · ${data.duration_ms} ms`;
-    case "provider.request": return "Ollama request body";
-    case "provider.response": return `Ollama response · HTTP ${data.status}`;
+    case "provider.request": return `${data.provider} request body`;
+    case "provider.response": return `${data.provider} response · HTTP ${data.status}`;
     default: return event.kind;
   }
 }
@@ -32,6 +36,7 @@ function eventLabel(event: Entry) {
 // A wire ID identifies a connection even if the design has since been renamed.
 function eventWires(event?: Entry): Set<unknown> | undefined {
   if (!event) return;
+  if (event.kind === "switch.selected" && Array.isArray(event.data.wires)) return new Set(event.data.wires);
   if (event.kind === "mapping.applied") return new Set([event.data.wire]);
   if (event.kind === "mapping.failed") return new Set([(event.data.rule as { edgeId?: string } | null)?.edgeId]);
   if (event.kind === "node.started" && Array.isArray(event.data.inputs))
@@ -126,8 +131,10 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
   const doc = run?.snapshot ?? design;
   const entries = run?.events ?? [];
   const states = new Map<string, string>();
+  const selectedPaths = new Map<string, unknown>();
   for (const e of entries) {
     if (e.node && e.kind.startsWith("node.")) states.set(e.node, e.kind.slice(5));
+    if (e.node && e.kind === "switch.selected") selectedPaths.set(e.node, e.data.label);
   }
   const activeEvent = entries.find(e => e.seq === eventSeq);
   const focusId = activeEvent?.node ?? nodeId;
@@ -137,7 +144,10 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     const incident = edge.source === focusId || edge.target === focusId;
     const highlighted = incident && (!wires || wires.has(edge.id));
     if (highlighted) neighbors.add(edge.source === focusId ? edge.target : edge.source);
-    return { ...edge, label: edge.name, animated: states.get(edge.target) === "started",
+    const path = edge.sourceHandle && [...(doc.graph.nodes.find(n => n.id === edge.source)?.data.switchDefinition?.paths ?? []),
+      otherwise].find(p => p.id === edge.sourceHandle);
+    // Run cards use one read-only handle. Keep the design's named port visible on the wire.
+    return { ...edge, sourceHandle: null, label: path ? path.label + " · " + edge.name : edge.name, animated: states.get(edge.target) === "started",
       className: focusId ? (highlighted ? "trace-wire-active" : "trace-wire-muted") : undefined };
   });
   function selectNode(id: string) {
@@ -149,7 +159,8 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     const state = states.get(node.id) ?? (run && run.status !== "running" ? "skipped" : "pending");
     return {id:node.id, position:node.position, measured:measurements.current.get(node.id),
       sourcePosition:Position.Right, targetPosition:Position.Left,
-      data:{label:<><strong>{node.data.label || node.type}</strong><small>{state}</small></>},
+      data:{label:<><strong>{node.data.label || node.type}</strong><small>{state}</small>
+        {selectedPaths.has(node.id) && <small>Path · {String(selectedPaths.get(node.id))}</small>}</>},
       className:[`trace-node trace-${state}`, node.id === focusId ? "trace-focus" :
         neighbors.has(node.id) ? "trace-neighbor" : focusId ? "trace-muted" : ""].join(" "),
       selected:node.id === focusId, ariaRole:"button", ariaLabel:node.data.label || node.type,

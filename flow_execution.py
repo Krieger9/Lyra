@@ -6,7 +6,8 @@ from time import perf_counter
 from fastapi import HTTPException
 
 from agent_output import run_agent
-from flow_graph import FlowGraph
+from flow_graph import FlowSnapshot, path_requirements
+from flow_switch import FlowFields
 from json_mapping import MappingError, assemble, validate_mappings
 from run_store import RUN_TIMEOUT
 
@@ -28,6 +29,8 @@ def plan_flow(graph, agents, observe=None):
                 pending.append(target)
     # Every connected branch must be valid before any model is called.
     plan, visiting, completed = [], set(), {"api-input"}
+    fields = FlowFields(nodes, incoming, agents)
+    required_paths = {"api-input": {}}
 
     def visit(node_id):
         if observe:
@@ -49,7 +52,14 @@ def plan_flow(graph, agents, observe=None):
             raise HTTPException(422, "A connected Agent definition is unavailable.")
         for edge in parents:
             visit(edge.source)
-        if node.type in ("agent", "json"):
+        if observe:
+            observe.node = node_id
+        if node.type == "switch":
+            if len(parents) != 1 or node.data.switchDefinition is None:
+                raise HTTPException(422, "Each connected Switch needs one input and a Switch definition.")
+            node.data.switchDefinition.validate_fields(fields.output(parents[0].source))
+        required_paths[node_id] = path_requirements(node, parents, required_paths)
+        if node.type in ("agent", "json", "switch"):
             plan.append(node)
         visiting.remove(node_id)
         completed.add(node_id)
@@ -60,17 +70,24 @@ def plan_flow(graph, agents, observe=None):
     return plan, incoming
 
 
-async def execute(document, library, studio, value, run):
-    graph = FlowGraph.model_validate(document["graph"])
-    plan, incoming = plan_flow(graph, document["agents"], run)
+async def execute(graph, agents, library, studio, value, run):
+    plan, incoming = plan_flow(graph, agents, run)
     run.node = None
     run.emit("plan.ready", order=["api-input", *[n.id for n in plan], "api-response"])
     outputs = {}
+    selected_paths = {}
     nodes = {n.id: n for n in graph.nodes}
     for node in [nodes["api-input"], *plan, nodes["api-response"]]:
         run.node = node.id
         start = perf_counter()
-        parents = incoming[node.id]
+        connections = incoming[node.id]
+        parents = [e for e in connections if e.source in outputs and
+                   (e.sourceHandle is None or e.sourceHandle == selected_paths.get(e.source))]
+        if node.type == "apiResponse" and connections and len(parents) != 1:
+            raise HTTPException(422, "API Response requires exactly one active input. Connect the selected path to the response.")
+        if node.type != "apiResponse" and len(parents) != len(connections):
+            run.emit("node.skipped", reason="An input path was not selected.")
+            continue
         inputs = {e.id: outputs[e.source] for e in parents}
         run.emit("node.started", inputs=[{"wire": e.id, "name": e.name, "source": e.source, "value": inputs[e.id]}
                                           for e in parents])
@@ -80,8 +97,14 @@ async def execute(document, library, studio, value, run):
             output = inputs[parents[0].id] if parents else ""
         elif node.type == "json":
             output = assemble(node.data.objectDefinition, inputs, {e.id: e.readAs for e in parents}, run.emit)
+        elif node.type == "switch":
+            output = inputs[parents[0].id]
+            path_id, label = node.data.switchDefinition.select(output)
+            selected_paths[node.id] = path_id
+            run.emit("switch.selected", path=path_id, label=label,
+                     wires=[e.id for e in graph.edges if e.source == node.id and e.sourceHandle == path_id])
         else:
-            definition = document["agents"][str(node.data.definition.id)]
+            definition = agents[str(node.data.definition.id)]
             output = await run_agent(library, studio, definition, inputs[parents[0].id], run.emit)
         outputs[node.id] = output
         run.emit("node.completed", output=output, duration_ms=round((perf_counter()-start)*1000))
@@ -89,10 +112,10 @@ async def execute(document, library, studio, value, run):
     return outputs["api-response"]
 
 
-async def perform(document, library, studio, value, run):
+async def perform(document: FlowSnapshot, library, studio, value, run):
     run.emit("run.started", input=value)
     try:
-        result = await asyncio.wait_for(execute(document, library, studio, value, run), RUN_TIMEOUT)
+        result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio, value, run), RUN_TIMEOUT)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)
         raise

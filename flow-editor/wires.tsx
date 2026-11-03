@@ -1,28 +1,6 @@
 import { useState } from "react";
-import type { Edge } from "@xyflow/react";
+import type { Wire } from "./graph";
 
-export type Wire = Edge & { name?: string | null; readAs?: "value" | "json" };
-
-export function nextWireName(used: Set<string>) {
-  let number = 1;
-  while (used.has("input" + number)) number++;
-  return "input" + number;
-}
-
-export function nameExistingWires(wires: Wire[]): Wire[] {
-  const used = new Map<string, Set<string>>();
-  for (const wire of wires) {
-    if (!used.has(wire.target)) used.set(wire.target, new Set());
-    if (wire.name) used.get(wire.target)!.add(wire.name);
-  }
-  return wires.map(wire => {
-    if (wire.name) return wire;
-    const names = used.get(wire.target)!;
-    const name = nextWireName(names);
-    names.add(name);
-    return { ...wire, name };
-  });
-}
 
 export function WireSettings({ wire, wires, jsonInput, change }: {
   wire: Wire; wires: Wire[]; jsonInput: boolean; change: (patch: Partial<Pick<Wire, "name" | "readAs">>) => void;

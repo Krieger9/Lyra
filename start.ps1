@@ -1,3 +1,5 @@
+param([switch]$SkipOllama)
+
 . "$PSScriptRoot\scripts\local-processes.ps1"
 
 function Test-Ready($url) {
@@ -43,19 +45,21 @@ try {
     try { Wait-Ready $api 'http://127.0.0.1:8765/' 'lyra' }
     catch { throw "$_ Check that the PostgreSQL instance configured by DATABASE_URL is running." }
 
-    if ($modelUri.IsLoopback) {
+    if (!$SkipOllama -and $modelUri.IsLoopback) {
         $tagsUrl = $modelUrl.TrimEnd('/') + '/api/tags'
         if (!(Test-Ready $tagsUrl)) {
             $ollama = Get-LyraProcess 'ollama'
-            if (!$ollama) {
+            $ollamaCommand = Get-Command ollama.exe -ErrorAction SilentlyContinue
+            if (!$ollama -and $ollamaCommand) {
                 $oldEndpoint = $env:OLLAMA_HOST
                 try {
                     $env:OLLAMA_HOST = $modelUrl
-                    $ollama = Start-LyraProcess 'ollama' (Get-Command ollama.exe).Source @('serve')
+                    $ollama = Start-LyraProcess 'ollama' $ollamaCommand.Source @('serve')
                     $started += 'ollama'
                 } finally { $env:OLLAMA_HOST = $oldEndpoint }
             }
-            Wait-Ready $ollama $tagsUrl 'ollama'
+            if ($ollama) { Wait-Ready $ollama $tagsUrl 'ollama' }
+            else { Write-Host 'Ollama is unavailable locally. Configure a provider in Lyra to run agents.' }
         }
     }
     Write-Host 'Lyra is ready at http://localhost:8765/'

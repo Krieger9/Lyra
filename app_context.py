@@ -2,4 +2,4 @@
 
 
 def library_for(request):
-    return request.app.state.studio.prompts.library
+    return request.app.state.library

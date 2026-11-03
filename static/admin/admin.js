@@ -81,7 +81,8 @@ async function loadHome() {
       if (result.status === 401) throw new Error("Your session expired. Sign in again.");
       if (result.status === 403) throw new Error("Administrator access is required.");
       const body = await result.json().catch(() => ({}));
-      throw new Error(typeof body.detail === "string" ? body.detail : "Could not save or load configuration. Check your entries and try again.");
+      const validation = Array.isArray(body.detail) && body.detail.map(error => error.msg).filter(Boolean).join(" ");
+      throw new Error(typeof body.detail === "string" ? body.detail : validation || "Could not save or load configuration. Check your entries and try again.");
     }
     return result.json();
   };
@@ -96,9 +97,16 @@ async function loadHome() {
     document.head.append(stylesheet);
     await import(assetUrl("/admin/flow-assets/editor.js"));
   }
+  if (["models", "model-groups", "protocols", "providers"].includes(page)) {
+    const { mountCatalogEditor } = await import(assetUrl("/admin/providers.js"));
+    await mountCatalogEditor(page);
+  }
   const descriptions = {
     home: "Your Lyra workspace at a glance.",
-    providers: "The provider serving chat requests.",
+    models: "Register the model identifiers accepted by your endpoints.",
+    "model-groups": "Choose the models available to providers using this group.",
+    protocols: "Choose a client adapter for each protocol.",
+    providers: "Set an API base URI, protocol, and model group.",
     flow: "Drag from a right output port to an Agent’s left input port to connect them.",
     agents: "Define reusable agents using instructions and prompts from PromptStudio.",
     prompts: "Manage the versioned Lyra prompt library.",

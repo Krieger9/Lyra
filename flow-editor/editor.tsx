@@ -2,41 +2,26 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
   addEdge, Background, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
-  useEdgesState, useNodesState, useReactFlow, type Connection, type Edge, type Node, type NodeProps, type Viewport,
+  useEdgesState, useNodesState, useReactFlow, type Connection, type Edge, type NodeProps, type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./editor.css";
 import { loadCatalog, type AgentDefinition, type Catalog, type PromptReference } from "./catalog";
-import { JsonMappingInspector, type JsonNodeData } from "./json-mapping";
+import { JsonMappingInspector } from "./json-mapping";
 import { AgentOutput } from "./agent-output";
 import { RunView } from "./run-view";
-import { nameExistingWires, nextWireName, WireSettings, type Wire } from "./wires";
+import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
+import { WireSettings } from "./wires";
+import { allowsConnection, graphDocument, hydrateGraph, nameExistingWires, nextWireName, ports, switchFieldGraph,
+  withEndpoints, type Agent, type ApiInput, type FlowItem, type GenericItem, type JsonItem, type PanelSize,
+  type SavedGraph, type Wire } from "./graph";
 import { draftSession, linkWithReturn, renderBreadcrumbs } from "../static/admin/navigation.js";
 
-type GenericItem = Node<{ label: string }, "item">;
-type JsonItem = Node<JsonNodeData, "json">;
-type ApiInput = Node<{ label: string }, "apiInput">;
-type ApiResponse = Node<{ label: string }, "apiResponse">;
-type Agent = Node<{ label: string; definition: AgentDefinition | null }, "agent">;
-type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent;
-type PanelSize = { width: number; height: number };
 type FlowDraft = { items: FlowItem[]; edges: Wire[]; tool: string; nextNumber: number; viewport: Viewport; panelSize: PanelSize;
   flowId?: string; revision?: number; name?: string; lastSaved?: string };
 type FlowSummary = { id: string; name: string; revision: number };
-type SavedFlow = FlowSummary & { graph: { nodes: FlowItem[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize } };
+type SavedFlow = FlowSummary & { graph: SavedGraph };
 
-function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewport, panelSize: PanelSize) {
-  return {
-    nodes: items.map(node => ({
-      id: node.id, type: node.type, position: node.position,
-      data: { label: node.data.label, definition: node.type === "agent" && node.data.definition
-        ? { id: node.data.definition.id } : null,
-        ...(node.type === "json" ? { objectDefinition: node.data.objectDefinition ?? null } : {}) },
-    })),
-    edges: edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, name: edge.name, readAs: edge.readAs ?? "value" })),
-    viewport, panelSize,
-  };
-}
 
 function agentConfigurationError(definition: AgentDefinition | null) {
   if (!definition) return "Select an agent definition before this flow can run.";
@@ -106,32 +91,14 @@ function ApiResponseCard() {
   </div>;
 }
 
-const nodeTypes = { item: ItemCard, json: JsonCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard };
+const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard };
 const palette = [
   { type: "agent", title: "Agent" },
   { type: "json", title: "JSON" },
+  { type: "switch", title: "Switch" },
   { type: "item", title: "Generic item" },
 ] as const;
 const edgeOptions = { markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 2 } };
-const startingNode: ApiInput = {
-  id: "api-input", type: "apiInput", data: { label: "API Input" },
-  position: { x: 112, y: 68 }, deletable: false, selected: true,
-  ariaLabel: "API Input, flow start",
-};
-const responseNode: ApiResponse = {
-  id: "api-response", type: "apiResponse", data: { label: "API Response" },
-  position: { x: 700, y: 68 }, deletable: false, ariaLabel: "API Response, flow response",
-};
-
-function withEndpoints(nodes: FlowItem[] = []) {
-  const input = nodes.find(node => node.type === "apiInput");
-  const response = nodes.find(node => node.type === "apiResponse");
-  return [
-    { ...startingNode, ...input, id: startingNode.id, deletable: false, data: startingNode.data },
-    ...nodes.filter(node => node.type !== "apiInput" && node.type !== "apiResponse"),
-    { ...responseNode, ...response, id: responseNode.id, deletable: false, data: responseNode.data },
-  ] as FlowItem[];
-}
 
 function Editor() {
   const [draft] = useState(() => draftSession<FlowDraft>());
@@ -158,7 +125,7 @@ function Editor() {
   const [resizing, setResizing] = useState(false);
   const grid = useRef<HTMLDivElement>(null);
   const panelDrag = useRef<{ pointerId: number; x: number; y: number; size: number } | null>(null);
-  const [catalog, setCatalog] = useState<Catalog>({ agents: [], prompts: [] });
+  const [catalog, setCatalog] = useState<Catalog>({ agents: [], prompts: [], providers: [] });
   const [catalogStatus, setCatalogStatus] = useState("Loading agents…");
   const [catalogReady, setCatalogReady] = useState(false);
   const [catalogRefresh, setCatalogRefresh] = useState(0);
@@ -166,8 +133,13 @@ function Editor() {
   const selected = items.find(item => item.selected);
   const selectedEdge = selected ? undefined : edges.find(edge => edge.selected);
   const removable = selected?.deletable === false ? undefined : selected ?? selectedEdge;
-  const sources = items.filter(item => item.type === "agent" || item.type === "json" ||
-    (selected?.type !== "apiResponse" && item.type === "apiInput"));
+  const sources = items.filter(item => item.id !== selected?.id).flatMap(item => {
+    if (item.type === "switch") return ports(item.data).map(p => ({ source: item.id, sourceHandle: p.id as string | null,
+      label: item.data.label + " · " + p.label }));
+    if (item.type === "agent" || item.type === "json" || (selected?.type !== "apiResponse" && item.type === "apiInput"))
+      return [{ source: item.id, sourceHandle: null, label: item.data.label }];
+    return [];
+  });
   const inputEdges = edges.filter(edge => edge.target === selected?.id);
   const invalidBase = items.find(node => node.type === "json" && node.data.baseError);
   const maximumPanelSize = stacked
@@ -225,13 +197,8 @@ function Editor() {
     let active = true;
     window.lyraAdminRequest<SavedFlow>("/api/admin/flows/" + requestedFlow).then(saved => {
       if (!active) return;
-      const nodes = withEndpoints(saved.graph.nodes).map(node => {
-        if (node.type !== "agent") return node;
-        const definition = catalog.agents.find(agent => agent.id === node.data.definition?.id) ?? null;
-        return { ...node, data: { label: definition?.name ?? "Unconfigured agent", definition } };
-      });
+      const { nodes, wires } = hydrateGraph(saved.graph, catalog.agents);
       setItems(nodes);
-      const wires = nameExistingWires(saved.graph.edges);
       setEdges(wires);
       setViewport(saved.graph.viewport);
       void setCanvasViewport(saved.graph.viewport);
@@ -315,14 +282,7 @@ function Editor() {
   }
 
   function validConnection(connection: Connection | Edge, replacedEdgeId?: string) {
-    const source = items.find(item => item.id === connection.source);
-    const target = items.find(item => item.id === connection.target);
-    if (!source || !target || source.id === target.id) return false;
-    if (!["apiInput", "agent", "json"].includes(source.type!)) return false;
-    if (target.type === "apiResponse") {
-      if (source.type === "apiInput" || edges.some(edge => edge.id !== replacedEdgeId && edge.target === target.id)) return false;
-    } else if (target.type !== "agent" && target.type !== "json") return false;
-    return !edges.some(edge => edge.id !== replacedEdgeId && edge.source === source.id && edge.target === target.id);
+    return allowsConnection(items, edges, connection, replacedEdgeId);
   }
 
   function connect(connection: Connection) {
@@ -334,8 +294,14 @@ function Editor() {
     setItems(current => current.map(node => ({ ...node, selected: node.id === connection.target })));
   }
 
-  function changeInput(edge: Edge, source: string) {
-    const connection = { ...edge, source, sourceHandle: null };
+  function sourceOptions(edge?: Wire) {
+    return sources.filter(s => validConnection({ ...s, target: selected!.id, targetHandle: null }, edge?.id))
+      .map(s => <option key={JSON.stringify([s.source, s.sourceHandle])} value={JSON.stringify([s.source, s.sourceHandle])}>{s.label}</option>);
+  }
+
+  function changeInput(edge: Edge, option: string) {
+    const [source, sourceHandle] = JSON.parse(option);
+    const connection = { ...edge, source, sourceHandle };
     if (!validConnection(connection, edge.id)) return;
     setEdges(current => current.map(other => other.id === edge.id ? connection : other));
   }
@@ -371,6 +337,8 @@ function Editor() {
       item = { ...common, type: "agent", data: { label: "Unconfigured agent", definition: null } };
     } else if (entry.type === "json") {
       item = { ...common, type: "json", data: { label: `JSON ${nextNumber.current++}`, objectDefinition: { base: {}, mappings: [] } } };
+    } else if (entry.type === "switch") {
+      item = { ...common, type: "switch", data: { label: `Switch ${nextNumber.current++}`, switchDefinition: newSwitch() } };
     } else {
       item = { ...common, type: entry.type, data: { label: `Item ${nextNumber.current++}` } };
     }
@@ -491,7 +459,7 @@ function Editor() {
         {selected?.type === "apiResponse" && <>
           <strong>API Response</strong>
           <p>Returns HTTP 200 on success, or an error status if the flow fails.</p>
-          <p>Connect one output to supply the response body. An unconnected response has an empty body.</p>
+          <p>Connect one output, or outputs from mutually exclusive Switch paths. Exactly one connected output must be active per run. An unconnected response has an empty body.</p>
         </>}
         {selectedEdge && <>
           <h3>Connection</h3>
@@ -500,7 +468,7 @@ function Editor() {
           <h3>To</h3><p>{items.find(node => node.id === selectedEdge.target)?.data.label}</p>
           <p>This ID is preserved when the flow is saved or the connection is rewired.</p>
         </>}
-        {(selected?.type === "item" || selected?.type === "json" || selected?.type === "agent" || selected?.type === "apiResponse") && <>
+        {selected && selected.type !== "apiInput" && <>
           {selected.type === "agent" && <>
             <label htmlFor="agent-definition">Defined agent</label>
             <select id="agent-definition" value={selected.data.definition?.id ?? ""} disabled={!catalogReady}
@@ -519,7 +487,7 @@ function Editor() {
             </p>}
           </>}
           {selected.type !== "apiResponse" && <>
-          <label htmlFor="item-name">{selected.type === "agent" ? "Agent" : selected.type === "json" ? "JSON" : "Item"} name</label>
+          <label htmlFor="item-name">{selected.type === "switch" ? "Switch" : selected.type === "agent" ? "Agent" : selected.type === "json" ? "JSON" : "Item"} name</label>
           <input id="item-name" value={selected.type === "agent" ? selected.data.definition?.name ?? "" : selected.data.label}
             maxLength={120} autoComplete="off"
             readOnly={selected.type === "agent"}
@@ -530,6 +498,13 @@ function Editor() {
               }
             }} />
           </>}
+          {selected.type === "switch" && <SwitchInspector key={selected.id} node={selected}
+            graphBody={JSON.stringify(switchFieldGraph(selected.id, items, edges))}
+            catalogVersion={JSON.stringify(catalog.agents.map(a => [a.id, a.revision]))}
+            change={(switchDefinition, removed) => {
+              updateNodeData(selected.id, { switchDefinition });
+              if (removed) setEdges(current => current.filter(e => e.source !== selected.id || e.sourceHandle !== removed));
+            }} />}
           {selected.type === "json" && <JsonMappingInspector key={selected.id} data={selected.data}
             ports={inputEdges.map(edge => {
               const source = items.find(node => node.id === edge.source);
@@ -542,6 +517,11 @@ function Editor() {
             onChange={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "agent" && selected.data.definition && <>
             <a href={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}`, { node: selected.id })}>Edit agent definition</a>
+            <h3>Request model</h3>
+            <p>{selected.data.definition.modelSelection
+              ? [catalog.providers.find(p => p.id === selected.data.definition?.modelSelection?.providerId)?.name,
+                 selected.data.definition.modelSelection.model].filter(Boolean).join(" · ")
+              : "Default chat model"}</p>
             <h3>Instructions</h3>
             <p>{selected.data.definition.instructions.name} · v{selected.data.definition.instructions.version}</p>
             <pre>{promptText(selected.data.definition.instructions)}</pre>
@@ -555,31 +535,29 @@ function Editor() {
               editUrl={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}&focus=output`, { node: selected.id })} />
           </>}
           <h3>Inputs</h3>
-          {(selected.type === "agent" || selected.type === "json" || selected.type === "apiResponse") ? <>
+          {selected.type !== "item" ? <>
             {inputEdges.length === 0 && <p>No input connected.</p>}
             {inputEdges.map((edge, index) => {
-              const label = sources.find(node => node.id === edge.source)?.data.label || "Untitled item";
+              const label = items.find(node => node.id === edge.source)?.data.label || "Untitled item";
               return <div className="flow-input" key={edge.id}>
                 <label htmlFor={`input-${edge.id}`}>Input {index + 1} source</label>
-                <select id={`input-${edge.id}`} value={edge.source}
+                <select id={`input-${edge.id}`} value={JSON.stringify([edge.source, edge.sourceHandle ?? null])}
                   onChange={event => changeInput(edge, event.target.value)}>
-                  {sources.filter(node => node.id !== selected.id &&
-                    !inputEdges.some(other => other.id !== edge.id && other.source === node.id))
-                    .map(node => <option key={node.id} value={node.id}>{node.data.label || "Untitled agent"}</option>)}
+                  {sourceOptions(edge)}
                 </select>
                 {wireSettings(edge)}
                 <button type="button" aria-label={`Disconnect ${label}`}
                   onClick={() => setEdges(current => current.filter(other => other.id !== edge.id))}>Disconnect</button>
               </div>;
             })}
-            {(selected.type !== "apiResponse" || inputEdges.length === 0) && <>
+            {(selected.type !== "switch" || inputEdges.length === 0) && <>
             <label htmlFor="input-source">Add input</label>
-            <select id="input-source" value="" onChange={event => connect({
-              source: event.target.value, target: selected.id, sourceHandle: null, targetHandle: null,
-            })}>
+            <select id="input-source" value="" onChange={event => {
+              const [source, sourceHandle] = JSON.parse(event.target.value);
+              connect({ source, sourceHandle, target: selected.id, targetHandle: null });
+            }}>
               <option value="" disabled>Choose a source…</option>
-              {sources.filter(node => node.id !== selected.id && !inputEdges.some(edge => edge.source === node.id))
-                .map(node => <option key={node.id} value={node.id}>{node.data.label || "Untitled agent"}</option>)}
+              {sourceOptions()}
             </select>
             </>}
           </> : <p>This generic item has no inputs.</p>}
