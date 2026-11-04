@@ -32,6 +32,7 @@ from model_adapter import MeteredOllamaAdapter
 from chat_input import ChatRequest
 from conversation_state import open_turn
 from memory import MemorySession, memory_enabled, router as memory_router
+from personalities import router as personalities_router
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -103,6 +104,7 @@ app.include_router(providers_router)
 app.include_router(flows_router)
 app.include_router(run_router)
 app.include_router(memory_router)
+app.include_router(personalities_router)
 mcp_server = install_mcp(app)
 design_server = install_design_mcp(app)
 MSAL = ROOT / "node_modules/@azure/msal-browser/lib"
@@ -133,6 +135,7 @@ def admin_home(request: Request, response: Response):
 
 @app.get("/admin/providers/", include_in_schema=False)
 @app.get("/admin/memories/", include_in_schema=False)
+@app.get("/admin/personalities/", include_in_schema=False)
 @app.get("/admin/models/", include_in_schema=False)
 @app.get("/admin/model-groups/", include_in_schema=False)
 @app.get("/admin/protocols/", include_in_schema=False)

@@ -60,3 +60,6 @@ dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .memory-search { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
 .memory-turn-list li { display: block; overflow-wrap: anywhere; }
 .memory-turn-list p { white-space: pre-wrap; }
+.personality-memory { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.personality-memory button { display: block; margin-top: 8px; }
+.personality-form #personality-preview { max-height: 480px; }

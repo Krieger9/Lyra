@@ -175,7 +175,7 @@ class MemoryStoreTests(unittest.TestCase):
             conn.execute(events.insert().values(run_id=recalled_run, seq=1, node="api-input", kind="memory.recalled",
                 at=utcnow(), elapsed_ms=0, data={"ids": [created["id"], private["id"]]}))
             conn.execute(text(f"DROP TABLE {self.schema}.memory_turns"))
-            conn.execute(text(f"DELETE FROM {self.schema}.lyra_schema_migrations WHERE revision = 6"))
+            conn.execute(text(f"DELETE FROM {self.schema}.lyra_schema_migrations WHERE revision >= 6"))
         with schema_transaction(self.storage.engine) as conn:
             apply_migrations(conn)
         detail = memory_detail(self.library, created["id"], "one")

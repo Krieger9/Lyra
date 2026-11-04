@@ -4,6 +4,7 @@ const sections = {
   "/admin/prompts/": "PromptStudio",
   "/admin/flow/": "Flow View",
   "/admin/memories/": "Memories",
+  "/admin/personalities/": "Personalities",
   "/admin/providers/": "Providers",
   "/admin/models/": "Models",
   "/admin/model-groups/": "Model groups",
@@ -97,7 +98,8 @@ export function renderBreadcrumbs() {
     for (const key of ["new", "id", "name", "draft", "saved"]) listUrl.searchParams.delete(key);
     crumbs.push({ title: sections[url.pathname], href: editor ? relativeUrl(listUrl) : relativeUrl(url) });
     if (editor) {
-      const noun = sections[url.pathname] === "PromptStudio" ? "prompt" : sections[url.pathname].slice(0, -1).toLowerCase();
+      const noun = sections[url.pathname] === "PromptStudio" ? "prompt" :
+        sections[url.pathname] === "Personalities" ? "personality" : sections[url.pathname].slice(0, -1).toLowerCase();
       crumbs.push({ title: (url.searchParams.has("new") ? "Create " : "Edit ") + noun, href: relativeUrl(url) });
     }
   }

@@ -94,7 +94,7 @@ def plan_flow(graph, agents, observe=None):
 
 
 async def execute(graph, agents, library, studio, value, run, chat_context=None, conversation_state=None,
-                  memory=None):
+                  memory=None, personality=None):
     plan, incoming = plan_flow(graph, agents, run)
     state = {"run": {}, "conversation": conversation_state if conversation_state is not None else {}}
     run.node = None
@@ -174,7 +174,8 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
             definition = agents[str(node.data.definition.id)]
             output = await run_agent(library, studio, definition, inputs[parents[0].id], run.emit,
                                      selection=node.data.inputSelection, chat_context=chat_context,
-                                     memories=memory.recalled if memory else None)
+                                     memories=memory.recalled if memory else None,
+                                     personality=personality if node.data.usePersonality else None)
         outputs[node.id] = output
         run.emit("node.completed", output=output, duration_ms=round((perf_counter()-start)*1000))
     run.node = None
@@ -185,7 +186,7 @@ async def perform(document: FlowSnapshot, library, studio, value, run, chat_cont
     run.emit("run.started", input=value)
     try:
         result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio,
-            value, run, chat_context, turn.objects if turn else None, memory), RUN_TIMEOUT)
+            value, run, chat_context, turn.objects if turn else None, memory, document.personality), RUN_TIMEOUT)
         run.finish("completed", result=result, turn=turn, memory=memory)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)

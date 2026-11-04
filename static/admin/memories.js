@@ -21,6 +21,14 @@ export async function mountMemories() {
   host.replaceChildren();
   if (memoryId) {
     const memory = await request("/memories/" + encodeURIComponent(memoryId));
+    if (memory.personalityAssignments?.length) {
+      host.append(element("h3", "Assigned to personalities"));
+      for (const profile of memory.personalityAssignments) {
+        const row = element("p", "");
+        row.append(link(profile.name, "/admin/personalities/?id=" + encodeURIComponent(profile.id)));
+        host.append(row);
+      }
+    }
     host.append(link("All memories", "/admin/memories/"), element("h2", memory.content),
       element("p", `${memory.kind} · saved ${date(memory.created_at)}`),
       element("h3", "Original evidence"), element("blockquote", memory.evidence),

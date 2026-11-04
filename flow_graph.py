@@ -12,6 +12,7 @@ from agent_store import AgentDefinition, Name, PromptReference, execution_agents
 from chat_input import ChatRequest, InputSelection
 from flow_switch import SwitchDefinition
 from flow_state import StateDefinition
+from personalities import SavedPersonality, load_personality
 from json_mapping import MappingError, ObjectDefinition, check_size
 
 flows = Table(
@@ -46,6 +47,8 @@ class NodeData(BaseModel):
     label: str = Field(default="", max_length=120)
     chatInput: bool = False
     recallMemories: bool = True
+    personalityId: UUID | None = None
+    usePersonality: bool = True
     inputSelection: InputSelection | None = None
     definition: AgentReference | None = None
     objectDefinition: ObjectDefinition | None = None
@@ -65,6 +68,8 @@ class FlowNode(BaseModel):
             raise ValueError("A State element requires its own State definition.")
         if self.data.chatInput and self.type != "apiInput":
             raise ValueError("Chat request format belongs to API Input.")
+        if self.data.personalityId and self.type != "apiInput":
+            raise ValueError("Personality selection belongs to API Input.")
         if self.data.inputSelection and self.type != "agent":
             raise ValueError("Input selection belongs to an Agent.")
         return self
@@ -254,6 +259,7 @@ class FlowSnapshot(BaseModel):
     revision: int
     graph: FlowGraph
     agents: dict[str, SavedAgent]
+    personality: SavedPersonality | None = None
 
     def agent_definitions(self):
         return {key: agent.model_dump(mode="json") for key, agent in self.agents.items()}
@@ -264,8 +270,10 @@ def snapshot(library, flow_id, revision=None) -> FlowSnapshot:
     if revision is not None and row["revision"] != revision:
         raise HTTPException(409, "This flow changed. Reopen the saved revision before running or activating it.")
     graph = FlowGraph.model_validate(row["graph"])
+    personality_id = next(n.data.personalityId for n in graph.nodes if n.type == "apiInput")
     return FlowSnapshot(**serialize_flow(row, include_graph=False), graph=graph,
-                        agents=graph_agents(library, graph))
+                        agents=graph_agents(library, graph),
+                        personality=load_personality(library, personality_id) if personality_id else None)
 
 
 def graph_agents(library, graph):

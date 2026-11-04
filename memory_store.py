@@ -96,7 +96,14 @@ def memory_detail(library, memory_id, owner=None, offset=0, limit=50):
             WHERE t.memory_id = :id ORDER BY r.started_at, t.run_id, t.relation, t.node
             LIMIT :limit OFFSET :offset
         """), {"id": memory_id, "limit": limit + 1, "offset": offset}).mappings().all()
-        return dict(memory) | {"turns": [dict(row) for row in turns[:limit]], "hasMore": len(turns) > limit}
+        result = dict(memory) | {"turns": [dict(row) for row in turns[:limit]], "hasMore": len(turns) > limit}
+        if owner is None:
+            assignments = connection.execute(text(f"SELECT p.id, p.name, p.revision, pm.id AS memory_id "
+                f"FROM {schema}.personality_memories pm JOIN {schema}.personalities p ON p.id=pm.personality_id "
+                "WHERE pm.source_memory_id=:id AND p.library=:library ORDER BY p.name, p.id"),
+                {"id": memory_id, "library": library.name}).mappings()
+            result["personalityAssignments"] = [dict(row) for row in assignments]
+        return result
 
 
 def memories_for_run(connection, library, run_id, owner=None):

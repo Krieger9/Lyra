@@ -12,6 +12,7 @@ import { AgentOutput } from "./agent-output";
 import { SelectionEditor } from "./chat-input";
 import { RunView } from "./run-view";
 import { MemoryStatus } from "./memory-status";
+import { PersonalityPicker } from "./personality";
 import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
 import { StateCard, StateInspector, StateObjectEditor, newState } from "./state";
 import { WireSettings } from "./wires";
@@ -61,7 +62,8 @@ function ApiInputCard({ data }: NodeProps<ApiInput>) {
       </svg>
     </span>
     <div><span className="item-kind">Flow start</span><strong>{data.label}</strong>
-      {(data.recallMemories ?? true) && <small>Recall long-term memories</small>}</div>
+      {(data.recallMemories ?? true) && <small>Recall long-term memories</small>}
+      {data.personalityId && <small>Load personality + goals + memories</small>}</div>
     <Handle type="source" position={Position.Right} title="API Input output" className="flow-port" />
   </div>;
 }
@@ -504,6 +506,7 @@ function Editor() {
             onChange={e => updateNodeData(selected.id, {recallMemories:e.target.checked})} />Recall long-term memories</label>
           <p>Search saved memories using the latest message and prior context. Relevant facts are supplied to agents
             before they answer, including in a new chat. Inspect API Input in run history to see the recalled memories.</p>
+          <PersonalityPicker value={selected.data.personalityId} change={personalityId => updateNodeData(selected.id, {personalityId})} />
         </>}
         {selected?.type === "apiResponse" && <>
           <strong>API Response</strong>
@@ -520,6 +523,8 @@ function Editor() {
         </>}
         {selected && selected.type !== "apiInput" && <>
           {selected.type === "agent" && <>
+            <label><input type="checkbox" checked={selected.data.usePersonality ?? true}
+              onChange={e => updateNodeData(selected.id, {usePersonality: e.target.checked})} />Use the flow’s personality</label>
             <label htmlFor="agent-definition">Defined agent</label>
             <select id="agent-definition" value={selected.data.definition?.id ?? ""} disabled={!catalogReady}
               onChange={event => {

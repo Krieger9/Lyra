@@ -30,11 +30,15 @@ test("chat input and per-node history selection survive reopening a saved flow",
   const graph = structuredClone(snapshot.graph);
   graph.nodes.find(n => n.type === "apiInput").data.chatInput = true;
   graph.nodes.find(n => n.type === "apiInput").data.recallMemories = false;
+  graph.nodes.find(n => n.type === "apiInput").data.personalityId = "personality-1";
+  graph.nodes.find(n => n.type === "agent").data.usePersonality = false;
   graph.nodes.find(n => n.type === "agent").data.inputSelection = { mode: "recent", turns: 3 };
   const {nodes, wires} = hydrateGraph(graph, catalog);
   const saved = graphDocument(nodes, wires, graph.viewport, graph.panelSize);
   assert.equal(saved.nodes.find(n => n.type === "apiInput").data.chatInput, true);
   assert.equal(saved.nodes.find(n => n.type === "apiInput").data.recallMemories, false);
+  assert.equal(saved.nodes.find(n => n.type === "apiInput").data.personalityId, "personality-1");
+  assert.equal(saved.nodes.find(n => n.type === "agent").data.usePersonality, false);
   assert.deepEqual(saved.nodes.find(n => n.type === "agent").data.inputSelection, {mode: "recent", turns: 3});
 });
 

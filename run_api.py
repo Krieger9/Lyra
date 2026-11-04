@@ -69,7 +69,14 @@ def read_run(run_id: UUID, request: Request, after: int = Query(0, ge=0), limit:
 @router.get("/chat-flow")
 def chat_binding(request: Request):
     doc = activation(library_for(request))
-    return doc.model_dump(include={"id", "revision", "name"}, mode="json") if doc else None
+    return binding_summary(doc) if doc else None
+
+
+def binding_summary(document):
+    result = document.model_dump(include={"id", "revision", "name"}, mode="json")
+    if document.personality:
+        result["personality"] = document.personality.model_dump(include={"id", "revision", "name"}, mode="json")
+    return result
 
 
 @router.put("/chat-flow/{flow_id}")
@@ -83,7 +90,7 @@ def bind(flow_id: UUID, body: Revision, request: Request):
     if not incoming["api-response"]:
         raise HTTPException(422, "Connect API Response before activating the flow for chat.")
     activate(library, document)
-    return {"id": str(flow_id), "revision": body.revision, "name": document.name}
+    return binding_summary(document)
 
 
 @router.delete("/chat-flow/{flow_id}")

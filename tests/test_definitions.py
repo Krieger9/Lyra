@@ -181,6 +181,116 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             ], "edges": [],
         }
 
+    async def test_personality_storage_is_scoped_atomic_and_keeps_embeddings_current(self):
+        from personalities import load_personality
+        from fastapi import HTTPException
+        from memory_store import save_memories
+        from run_store import runs, utcnow
+        url = "/api/admin/personalities"
+        body = {"name": "Curious Lyra", "template": "You are {{name}}.", "goals": ["Help the user learn"],
+                "memories": [{"content": "Lyra enjoys astronomy"}]}
+        embedding = [1.0] + [0.0] * 3071
+        with patch("personalities.embed", new=AsyncMock(side_effect=lambda texts: [embedding for _ in texts])) as embed:
+            response = await self.client.post(url, json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            saved = response.json()
+            profile_url = url + "/" + saved["id"]
+            self.assertEqual((await self.client.get(profile_url)).json(), saved)
+            other = PromptLibrary(self.storage, "another-library")
+            with self.assertRaises(HTTPException) as missing:
+                load_personality(other, saved["id"])
+            self.assertEqual(missing.exception.status_code, 404)
+            edit = {key: value for key, value in saved.items() if key != "id"}
+            edit["name"] = "Updated Lyra"
+            updated = await self.client.put(profile_url, json=edit)
+            self.assertEqual(updated.status_code, 200, updated.text)
+            self.assertEqual(embed.await_args.args[0], [])
+            self.assertEqual((await self.client.put(profile_url, json=edit)).status_code, 409)
+            edit = {key: value for key, value in updated.json().items() if key != "id"}
+            edit["memories"][0]["content"] = "Lyra enjoys botany"
+            updated = await self.client.put(profile_url, json=edit)
+            self.assertEqual(updated.status_code, 200, updated.text)
+            self.assertEqual(embed.await_args.args[0], ["Lyra enjoys botany"])
+            with self.storage.engine.connect() as connection:
+                self.assertEqual(connection.execute(text(f"SELECT count(*) FROM {self.schema}.memories")).scalar(), 0)
+                self.assertEqual(connection.execute(text(f"SELECT count(*) FROM {self.schema}.personality_memory_embeddings")).scalar(), 1)
+                self.assertEqual(connection.execute(text(f"SELECT count(*) FROM {self.schema}.personality_memories "
+                    "WHERE search_document @@ websearch_to_tsquery('english', 'botany')")).scalar(), 1)
+            # Copying from a general memory preserves its origin without moving the original.
+            run_id = uuid4()
+            with self.storage.engine.begin() as connection:
+                connection.execute(runs.insert().values(id=run_id, library=self.library.name, flow_id=uuid4(),
+                    revision=1, source="test", status="completed", started_at=utcnow(), snapshot={}))
+                source = save_memories(connection, self.library.name, "user", [{"content": "Lyra is my assistant",
+                    "kind": "fact", "evidence": "Lyra is my assistant", "source": {}, "embedding": embedding}], run_id)[0]["id"]
+            edit = {key: value for key, value in updated.json().items() if key != "id"}
+            edit["memories"].append({"content": "Lyra is my assistant", "sourceMemoryId": source})
+            updated = await self.client.put(profile_url, json=edit)
+            self.assertEqual(updated.status_code, 200, updated.text)
+            self.assertEqual(updated.json()["memories"][1]["sourceMemoryId"], source)
+            detail = (await self.client.get("/api/admin/memories/" + source)).json()
+            self.assertEqual(detail["personalityAssignments"][0]["id"], saved["id"])
+            edit = {key: value for key, value in updated.json().items() if key != "id"}
+            edit["memories"].append({"content": "An invalid source", "sourceMemoryId": str(uuid4())})
+            self.assertEqual((await self.client.put(profile_url, json=edit)).status_code, 422)
+            self.assertEqual((await self.client.get(profile_url)).json(), updated.json())
+            edit["memories"] = []
+            removed = await self.client.put(profile_url, json=edit)
+            self.assertEqual(removed.status_code, 200, removed.text)
+            with self.storage.engine.connect() as connection:
+                self.assertEqual(connection.execute(text(f"SELECT count(*) FROM {self.schema}.personality_memory_embeddings")).scalar(), 0)
+                self.assertEqual(connection.execute(text(f"SELECT count(*) FROM {self.schema}.memories")).scalar(), 1)
+        body["name"] = "Failed save"
+        with patch("personalities.embed", new=AsyncMock(side_effect=HTTPException(503, "Unavailable"))):
+            self.assertEqual((await self.client.post(url, json=body)).status_code, 503)
+        self.assertEqual(len((await self.client.get(url)).json()), 1)
+
+    async def test_personality_flows_pin_profiles_and_respect_agent_opt_out(self):
+        body = {"name": "Lyra", "template": "Use a curious voice.", "goals": ["Explain clearly"],
+                "memories": [{"content": "Lyra enjoys astronomy"}]}
+        with patch("personalities.embed", new=AsyncMock(side_effect=lambda texts: [[1.0] + [0.0] * 3071 for _ in texts])):
+            profile = (await self.client.post("/api/admin/personalities", json=body)).json()
+            agent = (await self.client.post("/api/admin/agents", json={"name": "Personality agent"})).json()
+            graph = self.flow_graph()
+            graph["nodes"][0]["data"]["personalityId"] = profile["id"]
+            graph["nodes"].append({"id": "voice", "type": "agent", "position": {"x": 400, "y": 100},
+                                   "data": {"definition": {"id": agent["id"]}}})
+            graph["edges"] = [{"id": "in", "source": "api-input", "target": "voice"},
+                              {"id": "out", "source": "voice", "target": "api-response"}]
+            flow = (await self.client.post("/api/admin/flows", json={"name": "Persona flow", "graph": graph})).json()
+            binding = "/api/admin/chat-flow/" + flow["id"]
+            activated = await self.client.put(binding, json={"revision": 1})
+            self.assertEqual(activated.json()["personality"]["revision"], 1)
+            edited = await self.client.put("/api/admin/personalities/" + profile["id"],
+                json=body | {"revision": 1, "template": "Use a formal voice.", "memories": []})
+            self.assertEqual(edited.status_code, 200, edited.text)
+        model = SimpleNamespace(complete=AsyncMock(return_value="Hello"))
+        app.state.studio.model, app.state.studio.traces = model, Mock()
+        with patch.dict(app.dependency_overrides, {require_chat_access: lambda: ["User.Chat"]}):
+            chat = await self.client.post("/api/chat", json={"message": "Hello"})
+            self.assertEqual(chat.status_code, 200, chat.text)
+            prompt = model.complete.await_args.args[0]
+            self.assertIn("curious voice", prompt)
+            self.assertIn("Lyra enjoys astronomy", prompt)
+            run = (await self.client.get("/api/admin/runs/" + chat.headers["X-Lyra-Run-Id"])).json()
+            self.assertEqual(run["snapshot"]["personality"]["revision"], 1)
+            event = next(e for e in run["events"] if e["kind"] == "personality.rendered")
+            self.assertEqual(event["data"]["memories"][0]["id"], profile["memories"][0]["id"])
+            history = (await self.client.get("/api/admin/personalities/" + profile["id"] + "/runs")).json()
+            self.assertEqual(history[0]["id"], run["id"])
+            await self.client.put(binding, json={"revision": 1})
+            self.assertEqual((await self.client.get("/api/admin/chat-flow")).json()["personality"]["revision"], 2)
+            await self.client.post("/api/chat", json={"message": "Hello again"})
+            self.assertIn("formal voice", model.complete.await_args.args[0])
+            self.assertNotIn("astronomy", model.complete.await_args.args[0])
+        graph["nodes"][-1]["data"]["usePersonality"] = False
+        await self.client.put("/api/admin/flows/" + flow["id"], json={"name": flow["name"], "revision": 1, "graph": graph})
+        result = await self.client.post("/api/admin/flows/" + flow["id"] + "/run", json={"input": "Neutral"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertNotIn("formal voice", model.complete.await_args.args[0])
+        self.assertNotIn("Explain clearly", model.complete.await_args.args[0])
+
     async def test_conversation_state_across_turns_retries_and_debug_runs(self):
         graph = self.flow_graph()
         state = {"scope": "conversation", "key": "context", "operation": "read", "initial": {"last": "initial"}}

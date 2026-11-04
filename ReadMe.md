@@ -276,3 +276,31 @@ From Lyra, use the development environment containing the editable Studio packag
 .\.venv\Scripts\python -m pip install -e "../Infrastructure/PromptStudio[test]"
 .\.venv\Scripts\python scripts/verify.py
 ```
+
+## Personalities
+
+Open **Configuration → Personalities** to create a reusable personality with a prompt template,
+goals and up to 24 curated memories. The supported placeholders are `{{name}}`, `{{goals}}` and
+`{{memories}}`; omitted goals and memories are appended automatically. Preview renders the exact
+personality section without calling a model. Template substitution is literal and does not execute
+Jinja code. Goals are guidance for the model, not scheduled tasks or a separate goal executor.
+
+On a flow's **API Input**, select a personality, save, and activate the flow for chat. Agent nodes
+include it by default; clear **Use the flow's personality** for classifiers or other neutral agents.
+State updaters and memory extraction retain their own instructions. The run inspector records the
+resolved prompt and the profile revision, goals and memories used. The personality editor links to
+its latest 50 runs. Activate again using **Reactivate with latest personality and agents** after edits;
+an active chat flow keeps its existing snapshot until reactivated, and historical runs never change.
+
+Personality knowledge lives in `personality_memories`, separately from owner-scoped general
+`memories`. All assigned personality memories are pinned into the prompt, independently of automatic
+general-memory recall and `LYRA_MEMORY_ENABLED`. These curated facts are shared with everyone using
+the flow. Copying a general memory into a personality is an explicit admin action that preserves a
+source link; it does not move or edit the original. Automatic extraction never writes into personality
+memory. System/agent instructions remain in the existing versioned prompt library.
+
+Each new or edited personality memory receives the same OpenAI `text-embedding-3-large` embedding
+as general memory, stored in `personality_memory_embeddings`; unchanged memories reuse their vectors.
+The separate records include a PostgreSQL full-text index. Saving memory content requires the configured
+OpenAI embedding key; prompt/goals-only edits do not call the embedding provider. Saves are atomic and
+revision checked. Admin APIs are under `/api/admin/personalities`, including `/preview` and `/{id}/runs`.

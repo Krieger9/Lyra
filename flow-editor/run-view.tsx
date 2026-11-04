@@ -6,13 +6,15 @@ import { useSampleInput, type InputSelection } from "./chat-input";
 
 type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string; chatInput?: boolean; inputSelection?: InputSelection | null; switchDefinition?: SwitchDefinition | null } }[];
   edges: (Edge & { name?: string | null })[] };
-type Document = { id: string; name: string; revision: number; graph: Graph };
+type Document = { id: string; name: string; revision: number; graph: Graph;
+  personality?: {id: string; name: string; revision: number; template: string; goals: string[];
+    memories: {id: string; content: string; sourceMemoryId?: string | null}[]} | null };
 type Entry = { seq: number; node: string | null; kind: string; at: string; elapsed_ms: number; data: Record<string, unknown> };
 type Summary = { id: string; source: string; revision: number; status: string; started_at: string };
 type MemoryLink = {id: string; content: string; relation: "created" | "reinforced" | "recalled"; node: string; evidence?: string};
 type RecordPage = Summary & { snapshot?: Document; events: Entry[]; hasMore: boolean; result: unknown; error?: string;
   memories?: MemoryLink[] };
-type Binding = Pick<Document, "id" | "name" | "revision">;
+type Binding = Pick<Document, "id" | "name" | "revision"> & {personality?: {id: string; name: string; revision: number} | null};
 const api = <T,>(path: string, options?: RequestInit) => window.lyraAdminRequest<T>("/api/admin" + path, options);
 const json = (method: string, body: unknown) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
@@ -21,6 +23,7 @@ const message = (failure: unknown) => failure instanceof Error ? failure.message
 function eventLabel(event: Entry) {
   const data = event.data;
   switch (event.kind) {
+    case "personality.rendered": return `Personality · ${data.name} · revision ${data.revision}`;
     case "memory.recalled": return `Recalled ${data.count ?? (data.ids as unknown[] | undefined)?.length ?? 0} memories`;
     case "memory.extracted": return `Selected ${data.count} memories to save`;
     case "memory.committed": return `Committed ${data.count} memory selections`;
@@ -128,11 +131,11 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
   const isActive = binding?.id === design.id && binding.revision === design.revision;
-  async function changeActivation() {
+  async function changeActivation(reapply = false) {
     setBusy(true);
     setError("");
     try {
-      if (isActive) {
+      if (isActive && !reapply) {
         await api(`/chat-flow/${design.id}?revision=${design.revision}`, {method:"DELETE"});
         setBinding(null);
       } else {
@@ -211,12 +214,20 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
         <h3>Run saved flow</h3>{controls}
         <button disabled={busy} onClick={start}>Run revision {design.revision}</button>
         <details><summary>Chat connection</summary><p>{binding ? `Active: ${binding.name} · revision ${binding.revision}` : "Chat uses the default prompt."}</p>
-          <button disabled={busy} onClick={changeActivation}>{isActive ? "Disconnect from chat" : "Use this revision in Lyra chat"}</button></details>
+          {binding?.personality && <p>Personality: {binding.personality.name} · revision {binding.personality.revision}</p>}
+          <button disabled={busy} onClick={() => changeActivation()}>{isActive ? "Disconnect from chat" : "Use this revision in Lyra chat"}</button>
+          {isActive && <button disabled={busy} onClick={() => changeActivation(true)}>Reactivate with latest personality and agents</button>}</details>
         {error && <p role="alert">{error}</p>}
         {run && <><h3>Run result</h3><p aria-live="polite">{run.status} · {run.source} · revision {run.revision} · {entries.at(-1)?.elapsed_ms ?? 0} ms</p>
           <small>{run.id}</small>{run.error && <p role="alert">{run.error}</p>}
           {run.status==="completed" && <pre>{pretty(run.result)}</pre>}
           <button disabled={run.status==="running" || run.hasMore} onClick={()=>download(run)}>Export run JSON</button>
+          {run.snapshot?.personality && <>
+            <h3>Personality snapshot</h3>
+            <a href={`/admin/personalities/?id=${encodeURIComponent(run.snapshot.personality.id)}`}>{run.snapshot.personality.name}</a>
+            <p>Revision {run.snapshot.personality.revision} · see personality events for the rendered prompt on each participating agent.</p>
+            <details><summary>Saved prompt, goals and memories</summary><pre>{pretty(run.snapshot.personality)}</pre></details>
+          </>}
           <h3>Memories associated with this turn</h3>
           {(run.memories ?? []).length ? <ul>{run.memories!.map(memory => <li key={`${memory.id}:${memory.relation}:${memory.node}`}>
             <strong>{memory.relation === "created" ? "Created" : memory.relation === "reinforced" ? "Reinforced" : "Recalled"}</strong>

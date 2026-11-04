@@ -91,6 +91,10 @@ async function loadHome() {
     await mountConfiguration(page);
   }
   let flowLookupError;
+  if (page === "personalities") {
+    const { mountPersonalities } = await import(assetUrl("/admin/personalities.js"));
+    await mountPersonalities();
+  }
   if (page === "memories") {
     const { mountMemories } = await import(assetUrl("/admin/memories.js"));
     await mountMemories();
@@ -128,6 +132,7 @@ async function loadHome() {
     agents: "Define reusable agents using instructions and prompts from PromptStudio.",
     prompts: "Manage the versioned Lyra prompt library.",
     memories: "Browse saved memories and the turns that created, reinforced or recalled them.",
+    personalities: "Write a personality’s prompt, goals and curated memories, then load it into a flow.",
   };
   statusLine.textContent = flowLookupError || descriptions[page];
 }
