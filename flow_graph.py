@@ -103,10 +103,22 @@ def path_requirements(node, parents, requirements):
             raise MappingError(f"{node.data.label} requires inputs from mutually exclusive Switch paths.")
         combined.update(guard)
         guards.append(guard)
+    if node.type == "apiResponse" and guards:
+        # Only decisions shared by every possible reply constrain a downstream State.
+        return {key: value for key, value in guards[0].items()
+                if all(guard.get(key) == value for guard in guards[1:])}
     return combined
 
 
 class FlowGraph(BaseModel):
+    stateObject: dict[str, JsonValue] = Field(default_factory=dict, max_length=64)
+
+    @field_validator("stateObject")
+    @classmethod
+    def bounded_state(cls, value):
+        check_size(value)
+        return value
+
     nodes: list[FlowNode] = Field(min_length=2, max_length=200)
     edges: list[FlowEdge] = Field(default_factory=list, max_length=400)
     viewport: Viewport = Field(default_factory=lambda: Viewport(x=0, y=0, zoom=1))
@@ -142,6 +154,7 @@ class FlowGraph(BaseModel):
                 raise ValueError("Read as JSON applies to a JSON node's incoming wires")
             allowed = source.type in ("apiInput", "agent", "json", "switch", "state") and target.type in ("agent", "json", "switch", "state")
             allowed = allowed or (source.type in ("agent", "json", "switch", "state") and target.type == "apiResponse")
+            allowed = allowed or (source.type == "apiResponse" and target.type == "state")
             if not allowed:
                 raise ValueError("This connection is not supported")
             if source.type == "switch":
@@ -150,7 +163,7 @@ class FlowGraph(BaseModel):
                     raise ValueError("Select an existing Switch path for this wire.")
             elif edge.sourceHandle is not None:
                 raise ValueError("Only Switch outputs have named ports.")
-            if target.type in ("switch", "state"):
+            if target.type == "switch":
                 if target.id in single_inputs:
                     raise ValueError(f"A {target.type.title()} accepts one input.")
                 single_inputs.add(target.id)
@@ -162,13 +175,13 @@ class FlowGraph(BaseModel):
         incoming = {key: [] for key in nodes}
         for edge in self.edges:
             incoming[edge.target].append(edge)
-        if len(incoming["api-response"]) > 1:
+        if len(incoming["api-response"]) > 1 or any(e.source == "api-response" for e in self.edges):
             requirements = {}
             visiting = set()
 
             def visit(key):
                 if key in visiting:
-                    raise ValueError("Remove cycles before connecting multiple API Response inputs.")
+                    raise ValueError("Remove cycles from API Response connections.")
                 if key not in requirements:
                     visiting.add(key)
                     for parent in incoming[key]:
@@ -257,5 +270,7 @@ def snapshot(library, flow_id, revision=None) -> FlowSnapshot:
 def graph_agents(library, graph):
     ids = [node.data.definition.id for node in graph.nodes
            if node.type == "agent" and node.data.definition]
+    ids.extend(node.data.stateDefinition.agentId for node in graph.nodes if node.type == "state" and
+               node.data.stateDefinition.operation in ("generate", "generateObject") and node.data.stateDefinition.agentId)
     with library.storage.engine.connect() as conn:
         return execution_agents(conn, library, ids)

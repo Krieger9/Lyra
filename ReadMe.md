@@ -79,9 +79,13 @@ A JSON node can copy the array with `{{ result.history }}`, a turn with `{{ resu
 
 ### Share a JSON object with State
 
-In Flow View, add **State** and choose a key, scope, operation, and initial JSON object. Place another State with the same key and scope to access that object elsewhere. Each State takes one incoming wire and outputs the current object. **Read** uses the wire as a trigger. **Update fields** overwrites the supplied top-level fields and keeps the others. **Replace object** takes the entire incoming object. Use a JSON element upstream to map a message or an Agent result into fields. Wire accesses to the same key in execution order whenever either placement writes.
+Add a **State** element, then open **State object** above the canvas. Add named properties with JSON defaults, such as `summary` with `""` or `decisions` with `[]`. Save the Flow to save the declarations. State placements with the same key and scope access the same runtime object. Connect accesses in execution order whenever either placement writes.
 
-For rolling context, connect API Input to a State read, pass its output and the current message into a JSON element, and feed that object to your answering Agent. An update branch can combine the message and the final reply, then send the resulting object to a State write. The final reply can also feed API Response directly.
+In the State inspector, **Map input fields** copies whole incoming values or selected fields to declared properties. For example, select the incoming wire, choose `.value/answer`, and map it to `summary`. **Generate a property with an agent** runs a saved agent with the current State and all inputs keyed by wire name, then assigns its result to one property. **Map a structured agent result** requires a saved agent with an object output contract. Each mapping selects a field from that validated result. **Read**, **Update fields**, and **Replace object** also remain available.
+
+Choose **Pass through input** to forward the original text or object after updating State. With several wires, select one to forward or return the object keyed by wire name. Choose **State property** to return its current value, including a list, number, or null. Existing placements that return the whole State keep that output.
+
+For rolling context, declare a `Context` property with an empty string default. Connect the right port of API Response to a conversation-scoped State. Select a generation operation and enable **Include completed chat turn**. Its agent receives the current `state`, named wire `inputs`, prior `history`, and a separate `latestTurn` containing `user` and the selected `assistant` reply. Have the agent fold durable details from that pair into the prior Context and map the result back to the property. Chat returns the selected reply once the update succeeds. To use a property earlier in a flow, add a State read with the same key and scope.
 
 **This run** starts fresh each time. **This conversation** commits after a successful chat turn and is private to the signed-in user, Flow, library, and conversation. The chat page starts a new conversation on reset or reload. Debug and synchronous admin runs use temporary State. Custom chat clients using conversation State must send UUID headers `X-Lyra-Conversation-Id` and `X-Lyra-Turn-Id`. Keep the first stable across the conversation and reuse the second only when retrying the same request.
 
@@ -180,6 +184,47 @@ The persisted `FlowSnapshot` contains the flow ID, name, revision, graph, and re
 - `inspect_flow_run` exports the graph, agents, result and events as structured data. Use `after` and `limit` to page through larger runs. These tools are read-only. An agent assisting with a design can inspect actual values and propose a change.
 
 Run evidence includes original messages, prompt text and model output. It persists in the local database until removed by an operator. Debug runs execute in the serving process. After a process interruption the available evidence remains inspectable.
+
+## Connect Codex to Lyra
+
+Use the Streamable HTTP endpoint `http://localhost:8765/mcp/design` for editing. It exposes the run inspectors plus these design tools.
+
+| Task | Tools |
+| --- | --- |
+| Discover editable objects, pinned prompt versions and model choices | `get_catalog`, `list_flows`, `get_flow` |
+| Publish a prompt version | `publish_prompt` |
+| Create or revise an agent definition | `create_agent`, `update_agent` |
+| Create or revise a saved flow graph | `create_flow`, `update_flow` |
+| Test consecutive turns in a separate design conversation | `test_flow_turn`, `inspect_flow_run` |
+| Inspect or activate the chat binding | `get_chat_binding`, `activate_chat_flow` |
+
+1. Obtain a delegated access token for Lyra’s backend using the full admin scope (`ENTRA_API_URI/ENTRA_ADMIN_SCOPE`) and an account with the admin role. The existing Lyra frontend registration is accepted. For a different token-issuing client, grant that client delegated access to the scope, add its application ID to `ENTRA_MCP_DESIGN_CLIENT_IDS` in Lyra’s `.env`, and restart Lyra. The inspector at `/mcp` has a separate client allowlist.
+2. Register the server once. The Codex configuration stores the environment variable name. [OpenAI Docs on Codex MCP commands](https://learn.chatgpt.com/docs/developer-commands#codex-mcp)
+
+   ```powershell
+   codex mcp add lyra --url http://localhost:8765/mcp/design --bearer-token-env-var LYRA_MCP_TOKEN
+   codex mcp get lyra
+   ```
+
+3. For the PowerShell launcher, authorize Azure CLI (application ID `04b07795-8ddb-461a-bbee-02f9e1bf7b46`) as the delegated client in step 1. With Lyra running, use the following on first sign-in. The script reads the tenant and scope from Lyra, obtains the token, shows its local expiration time and launches the Codex CLI in the Lyra project with `LYRA_MCP_TOKEN` set. [Azure CLI sign-in](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively)
+
+   ```powershell
+   .\start-codex.ps1 -Login
+   ```
+
+   On subsequent launches, run `.\start-codex.ps1` to use your Azure CLI sign-in. When the token expires, exit Codex and rerun the launcher.
+
+**Codex Desktop.** For a local desktop connection, use the same Azure CLI authorization and sign-in. Set the `lyra` entry in the shared Codex `config.toml` to the following, adjusting the script path for your checkout. The helper obtains the authorization header from Azure CLI when Codex connects and when it retries after an expired token.
+
+```toml
+[mcp_servers.lyra]
+url = "http://localhost:8765/mcp/design"
+http_headers_helper = 'powershell.exe -NoProfile -NonInteractive -File "D:\Projects\Lyra\scripts\lyra-token.ps1" -McpHeaders'
+```
+
+Open a new desktop chat and ask “Use Lyra to list my flows.” If the server is missing from the tool list, fully quit and reopen the desktop app to load the updated configuration. [OpenAI Docs on local MCP configuration](https://developers.openai.com/codex/mcp#connect-an-existing-mcp-server)
+
+Try “Use Lyra to list my flows.” Then try “Duplicate the flow named Intake as Intake Draft and tell me its new ID.” Codex can read the complete graph with `get_flow` and save a copy with `create_flow`. Updates require the current revision. On a conflict, reread the design and reconcile the edit before saving. Test a saved revision with `test_flow_turn`, reusing the conversation ID and supplying the chat history on each new turn. Its checkpoints are scoped to the design caller and revision. Activate the tested revision separately in Flow View or with `activate_chat_flow`.
 
 ## Chat API
 

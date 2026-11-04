@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  addEdge, Background, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
+  addEdge, Background, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider, SelectionMode,
   useEdgesState, useNodesState, useReactFlow, type Connection, type Edge, type NodeProps, type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -12,7 +12,7 @@ import { AgentOutput } from "./agent-output";
 import { SelectionEditor } from "./chat-input";
 import { RunView } from "./run-view";
 import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
-import { StateCard, StateInspector, newState } from "./state";
+import { StateCard, StateInspector, StateObjectEditor, newState } from "./state";
 import { WireSettings } from "./wires";
 import { allowsConnection, graphDocument, hydrateGraph, nameExistingWires, nextWireName, ports, switchFieldGraph,
   withEndpoints, type Agent, type ApiInput, type FlowItem, type GenericItem, type JsonItem, type PanelSize,
@@ -20,6 +20,7 @@ import { allowsConnection, graphDocument, hydrateGraph, nameExistingWires, nextW
 import { draftSession, linkWithReturn, renderBreadcrumbs } from "../static/admin/navigation.js";
 
 type FlowDraft = { items: FlowItem[]; edges: Wire[]; tool: string; nextNumber: number; viewport: Viewport; panelSize: PanelSize;
+  stateObject?: Record<string, unknown>;
   flowId?: string; revision?: number; name?: string; lastSaved?: string };
 type FlowSummary = { id: string; name: string; revision: number };
 type SavedFlow = FlowSummary & { graph: SavedGraph };
@@ -90,6 +91,7 @@ function ApiResponseCard() {
       </svg>
     </span>
     <div><span className="item-kind">Flow response · 200 / error</span><strong>API Response</strong></div>
+    <Handle type="source" position={Position.Right} title="Selected reply for State" className="flow-port" />
   </div>;
 }
 
@@ -105,6 +107,7 @@ const edgeOptions = { markerEnd: { type: MarkerType.ArrowClosed }, style: { stro
 
 function Editor() {
   const [draft] = useState(() => draftSession<FlowDraft>());
+  const [stateObject, setStateObject] = useState(draft.data?.stateObject ?? {});
   const [items, setItems, onNodesChange] = useNodesState<FlowItem>(withEndpoints(draft.data?.items));
   const [edges, setEdges, onEdgesChange] = useEdgesState<Wire>(nameExistingWires(draft.data?.edges ?? []));
   const { updateNodeData, deleteElements, fitView, getViewport, setViewport: setCanvasViewport } = useReactFlow<FlowItem>();
@@ -133,13 +136,15 @@ function Editor() {
   const [catalogReady, setCatalogReady] = useState(false);
   const [catalogRefresh, setCatalogRefresh] = useState(0);
   const nextNumber = useRef(draft.data?.nextNumber ?? 1);
-  const selected = items.find(item => item.selected);
-  const selectedEdge = selected ? undefined : edges.find(edge => edge.selected);
+  const selectedItems = items.filter(item => item.selected);
+  const selected = selectedItems.length === 1 ? selectedItems[0] : undefined;
+  const selectedEdge = selectedItems.length === 0 ? edges.find(edge => edge.selected) : undefined;
   const removable = selected?.deletable === false ? undefined : selected ?? selectedEdge;
   const sources = items.filter(item => item.id !== selected?.id).flatMap(item => {
     if (item.type === "switch") return ports(item.data).map(p => ({ source: item.id, sourceHandle: p.id as string | null,
       label: item.data.label + " · " + p.label }));
-    if (item.type === "agent" || item.type === "json" || item.type === "state" || (selected?.type !== "apiResponse" && item.type === "apiInput"))
+    if (item.type === "agent" || item.type === "json" || item.type === "state" || (selected?.type !== "apiResponse" && item.type === "apiInput")
+        || (item.type === "apiResponse" && selected?.type === "state"))
       return [{ source: item.id, sourceHandle: null, label: item.data.label }];
     return [];
   });
@@ -152,7 +157,7 @@ function Editor() {
   const minimumPanelSize = Math.min(stacked ? 120 : 220, maximumPanelSize);
   const clampPanelSize = (value: number) => Math.max(minimumPanelSize, Math.min(maximumPanelSize, value));
   const currentPanelSize = clampPanelSize(stacked ? panelSize.height : panelSize.width);
-  const hasChanges = Boolean(invalidBase) || lastSaved !== JSON.stringify({ name: flowName.trim(), graph: graphDocument(items, edges, viewport, panelSize) });
+  const hasChanges = Boolean(invalidBase) || lastSaved !== JSON.stringify({ name: flowName.trim(), graph: graphDocument(items, edges, viewport, panelSize, stateObject) });
 
   function resizePanel(value: number) {
     const size = Math.round(clampPanelSize(value));
@@ -181,15 +186,15 @@ function Editor() {
     return () => { live = false; };
   }, []);
   useEffect(() => {
-    draft.save({ items, edges, tool, nextNumber: nextNumber.current, viewport, panelSize, flowId, revision, name: flowName, lastSaved });
-  }, [draft, items, edges, tool, viewport, panelSize, flowId, revision, flowName, lastSaved]);
+    draft.save({ items, edges, tool, nextNumber: nextNumber.current, viewport, panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
+  }, [draft, items, edges, tool, viewport, panelSize, flowId, revision, flowName, lastSaved, stateObject]);
   useEffect(() => {
     function saveBeforeLeaving() {
-      draft.save({ items, edges, tool, nextNumber: nextNumber.current, viewport: getViewport(), panelSize, flowId, revision, name: flowName, lastSaved });
+      draft.save({ items, edges, tool, nextNumber: nextNumber.current, viewport: getViewport(), panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
     }
     window.addEventListener("pagehide", saveBeforeLeaving);
     return () => window.removeEventListener("pagehide", saveBeforeLeaving);
-  }, [draft, items, edges, tool, getViewport, panelSize, flowId, revision, flowName, lastSaved]);
+  }, [draft, items, edges, tool, getViewport, panelSize, flowId, revision, flowName, lastSaved, stateObject]);
 
   useEffect(() => {
     window.lyraAdminRequest<FlowSummary[]>("/api/admin/flows").then(setSavedFlows)
@@ -203,6 +208,7 @@ function Editor() {
       if (!active) return;
       const { nodes, wires } = hydrateGraph(saved.graph, catalog.agents);
       setItems(nodes);
+      setStateObject(saved.graph.stateObject ?? {});
       setEdges(wires);
       setViewport(saved.graph.viewport);
       void setCanvasViewport(saved.graph.viewport);
@@ -210,7 +216,7 @@ function Editor() {
       setFlowId(saved.id);
       setRevision(saved.revision);
       setFlowName(saved.name);
-      setLastSaved(JSON.stringify({ name: saved.name, graph: graphDocument(nodes, wires, saved.graph.viewport, saved.graph.panelSize) }));
+      setLastSaved(JSON.stringify({ name: saved.name, graph: graphDocument(nodes, wires, saved.graph.viewport, saved.graph.panelSize, saved.graph.stateObject) }));
       setLoadingFlow(false);
       setFlowStatus("Flow opened.");
       nextNumber.current = nodes.length;
@@ -224,7 +230,7 @@ function Editor() {
     setSavingFlow(true);
     setFlowStatus("Saving flow…");
     try {
-      const payload = { name: flowName.trim(), graph: graphDocument(items, edges, getViewport(), panelSize) };
+      const payload = { name: flowName.trim(), graph: graphDocument(items, edges, getViewport(), panelSize, stateObject) };
       const saved = await window.lyraAdminRequest<SavedFlow>("/api/admin/flows" + (flowId ? "/" + flowId : ""), {
         method: flowId ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...payload, revision }),
@@ -252,7 +258,7 @@ function Editor() {
       const saved = await saveFlow();
       if (saved) setRunDesign(saved);
     } else {
-      setRunDesign({id: flowId, name: flowName, revision, graph: {nodes: items, edges, viewport, panelSize}});
+      setRunDesign({id: flowId, name: flowName, revision, graph: {nodes: items, edges, viewport, panelSize, stateObject}});
     }
   }
 
@@ -289,6 +295,27 @@ function Editor() {
 
   function validConnection(connection: Connection | Edge, replacedEdgeId?: string) {
     return allowsConnection(items, edges, connection, replacedEdgeId);
+  }
+
+  function sampleOutput(id: string, visited = new Set<string>()): unknown {
+    const node = items.find(item => item.id === id);
+    if (!node || visited.has(id)) return undefined;
+    const next = new Set(visited).add(id);
+    if (node.type === "apiInput") return node.data.chatInput ? {message:"Hello", history:[{role:"user", content:"Earlier message"}]} : undefined;
+    if (node.type === "json") return node.data.objectDefinition?.base;
+    if (node.type === "agent" && node.data.definition?.outputSchema) return sampleObject(node.data.definition.outputSchema.fields);
+    const parents = edges.filter(edge => edge.target === id);
+    if (node.type === "switch" && parents.length) return sampleOutput(parents[0].source, next);
+    if (node.type !== "state") return undefined;
+    const def = node.data.stateDefinition;
+    if (def.output !== "input") {
+      const sample = {...stateObject, ...def.initial};
+      return def.output === "property" ? sample[def.outputProperty ?? ""] : sample;
+    }
+    if (!def.outputWire && parents.length > 1)
+      return Object.fromEntries(parents.map(edge => [edge.name ?? edge.id, sampleOutput(edge.source, next)]));
+    const parent = parents.find(edge => !def.outputWire || edge.id === def.outputWire);
+    return parent && sampleOutput(parent.source, next);
   }
 
   function connect(connection: Connection) {
@@ -391,6 +418,8 @@ function Editor() {
         <button className="add-item" type="button" onClick={addItem}>+ Add to canvas</button>
       </div>
     </div>
+    {(items.some(node => node.type === "state") || Object.keys(stateObject).length > 0) &&
+      <StateObjectEditor properties={stateObject} change={setStateObject} />}
     <div className={`flow-grid${resizing ? " resizing" : ""}`} ref={grid}>
       <div className="flow-canvas" onKeyDown={event => {
         if (!removable || event.repeat || event.defaultPrevented || (event.key !== "Delete" && event.key !== "Backspace")) return;
@@ -411,7 +440,7 @@ function Editor() {
           }}
           onNodeClick={() => setEdges(current => current.map(edge => ({ ...edge, selected: false })))}
           isValidConnection={validConnection} onConnect={connect}
-          nodeOrigin={[0.5, 0.5]} multiSelectionKeyCode={null}
+          nodeOrigin={[0.5, 0.5]} selectionOnDrag selectionMode={SelectionMode.Partial} panOnDrag={[1]} multiSelectionKeyCode={null}
           selectionKeyCode={null} deleteKeyCode={null} ariaLabelConfig={{ "node.a11yDescription.default":
             "Press Enter or Space to select a flow item. Use the arrow keys to move it." }}>
           <Background gap={20} color="#cfccda" />
@@ -473,6 +502,7 @@ function Editor() {
           <strong>API Response</strong>
           <p>Returns HTTP 200 on success, or an error status if the flow fails.</p>
           <p>Connect one output, or outputs from mutually exclusive Switch paths. Exactly one connected output must be active per run. An unconnected response has an empty body.</p>
+          <p>Connect the right port to State to update memory with the selected reply before the turn commits.</p>
         </>}
         {selectedEdge && <>
           <h3>Connection</h3>
@@ -511,9 +541,11 @@ function Editor() {
               }
             }} />
           </>}
-          {selected.type === "state" && <StateInspector data={selected.data} change={patch => updateNodeData(selected.id, patch)} />}
+          {selected.type === "state" && <StateInspector key={selected.id} data={selected.data} properties={stateObject}
+            agents={catalog.agents} ports={inputEdges.map(edge => ({id:edge.id, name:edge.name!, base:sampleOutput(edge.source)}))}
+            change={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "switch" && <SwitchInspector key={selected.id} node={selected}
-            graphBody={JSON.stringify(switchFieldGraph(selected.id, items, edges))}
+            graphBody={JSON.stringify(switchFieldGraph(selected.id, items, edges, stateObject))}
             catalogVersion={JSON.stringify(catalog.agents.map(a => [a.id, a.revision]))}
             change={(switchDefinition, removed) => {
               updateNodeData(selected.id, { switchDefinition });
@@ -522,14 +554,9 @@ function Editor() {
           {selected.type === "json" && <JsonMappingInspector key={selected.id} data={selected.data}
             ports={inputEdges.map(edge => {
               const source = items.find(node => node.id === edge.source);
-              const fields = source?.type === "agent" ? source.data.definition?.outputSchema?.fields : undefined;
-              const chatInput = source?.type === "apiInput" && source.data.chatInput;
-              const base = chatInput ? { message: "Hello", history: [{ role: "user", content: "Earlier message" }] }
-                : fields ? sampleObject(fields)
-                : source?.type === "json" ? source.data.objectDefinition?.base
-                : source?.type === "state" ? source.data.stateDefinition.initial : undefined;
+              const base = sampleOutput(edge.source);
               return { id: edge.id, name: edge.name!, readAs: edge.readAs, label: source?.data.label ?? "Input",
-                structured: Boolean(chatInput || fields) || source?.type === "json" || source?.type === "state", base };
+                structured: base !== undefined && typeof base !== "string" || source?.type === "json", base };
             })}
             onChange={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "agent" && selected.data.definition && <>
@@ -570,7 +597,7 @@ function Editor() {
                   onClick={() => setEdges(current => current.filter(other => other.id !== edge.id))}>Disconnect</button>
               </div>;
             })}
-            {(!["switch", "state"].includes(selected.type!) || inputEdges.length === 0) && <>
+            {(selected.type !== "switch" || inputEdges.length === 0) && <>
             <label htmlFor="input-source">Add input</label>
             <select id="input-source" value="" onChange={event => {
               const [source, sourceHandle] = JSON.parse(event.target.value);
@@ -582,7 +609,8 @@ function Editor() {
             </>}
           </> : <p>This generic item has no inputs.</p>}
         </>}
-        {!selected && !selectedEdge && <p>Select an item or connection on the canvas to inspect it.</p>}
+        {selectedItems.length > 1 && <p>{selectedItems.length} items selected. Drag the selection to move them together.</p>}
+        {!selectedItems.length && !selectedEdge && <p>Select an item or connection to inspect it. Drag on empty canvas to select multiple items. Hold Space and drag to pan.</p>}
       </aside>
     </div>
   </div>;

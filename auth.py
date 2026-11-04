@@ -34,6 +34,8 @@ class EntraAuth:
         self.frontend = str(UUID(os.environ["ENTRA_FE_CLIENT_ID"]))
         self.mcp_clients = {client.strip().lower() for client in os.getenv("ENTRA_MCP_CLIENT_IDS", "").split(",")
                             if client.strip()}
+        self.design_clients = {client.strip().lower() for client in os.getenv("ENTRA_MCP_DESIGN_CLIENT_IDS", "").split(",")
+                               if client.strip()}
         self.backend = str(UUID(os.environ["ENTRA_BE_CLIENT_ID"]))
         self.resource = os.environ["ENTRA_API_URI"].strip().rstrip("/")
         self.scope = os.environ["ENTRA_CHAT_SCOPE"].strip()
@@ -63,7 +65,7 @@ class EntraAuth:
     def authorize(self, token: str, *, admin: bool = False, mcp: bool = False):
         return self.authorized_claims(token, admin=admin, mcp=mcp)["roles"]
 
-    def authorized_claims(self, token: str, *, admin: bool = False, mcp: bool = False):
+    def authorized_claims(self, token: str, *, admin: bool = False, mcp: bool = False, design: bool = False):
         if admin:
             self.check_admin_config()
         try:
@@ -85,7 +87,8 @@ class EntraAuth:
         except jwt.PyJWTError as exc:
             raise HTTPException(401, "Invalid or expired access token.", headers={"WWW-Authenticate": "Bearer"}) from exc
         client_id = claims.get("azp" if v2 else "appid")
-        if client_id != self.frontend and not (admin and mcp and client_id in self.mcp_clients):
+        clients = self.design_clients if design else self.mcp_clients
+        if client_id != self.frontend and not (admin and mcp and client_id in clients):
             raise HTTPException(403, "Access token was not issued to the Lyra frontend.")
         scopes = claims.get("scp")
         required_scope = self.admin_scope if admin else self.scope
@@ -124,3 +127,10 @@ def require_mcp_access(credentials: HTTPAuthorizationCredentials | None = Depend
     if credentials is None:
         raise HTTPException(401, "An administrator access token is required.", headers={"WWW-Authenticate": "Bearer"})
     settings().authorize(credentials.credentials, admin=True, mcp=True)
+
+
+def require_design_access(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+    if credentials is None:
+        raise HTTPException(401, "An administrator access token is required.", headers={"WWW-Authenticate": "Bearer"})
+    claims = settings().authorized_claims(credentials.credentials, admin=True, mcp=True, design=True)
+    request.state.design_owner = "design/" + claims["tid"] + "/" + claims["sub"]

@@ -37,7 +37,10 @@ def preview_json(body: MappingPreview):
 @router.get("")
 def list_flows(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
-    library = library_for(request)
+    return flow_summaries(library_for(request))
+
+
+def flow_summaries(library):
     with library.storage.engine.connect() as connection:
         rows = connection.execute(select(flows).where(
             flows.c.library == library.name).order_by(flows.c.name, flows.c.id)).mappings().all()
@@ -53,7 +56,7 @@ def switch_fields(node_id: str, graph: FlowGraph, request: Request):
     for edge in graph.edges:
         incoming[edge.target].append(edge)
     try:
-        return FlowFields(nodes, incoming, graph_agents(library_for(request), graph)).output(node_id)
+        return FlowFields(nodes, incoming, graph_agents(library_for(request), graph), graph.stateObject).output(node_id)
     except MappingError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -65,8 +68,7 @@ def get_flow(flow_id: UUID, request: Request, response: Response):
 
 
 @router.post("", status_code=201)
-def create_flow(body: FlowWrite, request: Request):
-    library = library_for(request)
+def create_flow(body: FlowWrite, library=Depends(library_for)):
     with library.storage.engine.begin() as connection:
         row = connection.execute(flows.insert().values(
             id=uuid4(), name=body.name, library=library.name, revision=1,
@@ -76,8 +78,7 @@ def create_flow(body: FlowWrite, request: Request):
 
 
 @router.put("/{flow_id}")
-def update_flow(flow_id: UUID, body: FlowUpdate, request: Request):
-    library = library_for(request)
+def update_flow(flow_id: UUID, body: FlowUpdate, library=Depends(library_for)):
     with library.storage.engine.begin() as connection:
         row = connection.execute(flows.update().where(
             flows.c.id == flow_id, flows.c.library == library.name, flows.c.revision == body.revision,

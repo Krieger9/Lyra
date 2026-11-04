@@ -24,7 +24,10 @@ router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin_acce
 @router.get("/catalog")
 def catalog(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
-    library = library_for(request)
+    return read_catalog(library_for(request))
+
+
+def read_catalog(library):
     with library.storage.engine.connect().execution_options(isolation_level="REPEATABLE READ") as connection:
         rows = connection.execute(select(definitions).where(
             definitions.c.library == library.name).order_by(definitions.c.name, definitions.c.id)).mappings().all()
@@ -34,8 +37,7 @@ def catalog(request: Request, response: Response):
 
 
 @router.post("/agents", status_code=201)
-def create_agent(body: AgentDefinition, request: Request):
-    library = library_for(request)
+def create_agent(body: AgentDefinition, library=Depends(library_for)):
     values = agent_values(body, library) | {"id": uuid4(), "revision": 1}
     with library.storage.engine.begin() as connection:
         lock_model_catalog(connection, library)
@@ -45,8 +47,7 @@ def create_agent(body: AgentDefinition, request: Request):
 
 
 @router.put("/agents/{agent_id}")
-def update_agent(agent_id: UUID, body: AgentUpdate, request: Request):
-    library = library_for(request)
+def update_agent(agent_id: UUID, body: AgentUpdate, library=Depends(library_for)):
     values = agent_values(body, library) | {"revision": body.revision + 1}
     if "outputSchema" not in body.model_fields_set:
         values.pop("output_schema")
@@ -93,8 +94,8 @@ async def test_agent(agent_id: UUID, body: AgentTestInput, request: Request, res
 
 
 @router.post("/prompts", status_code=201)
-def save_prompt(body: PromptWrite, request: Request):
+def save_prompt(body: PromptWrite, library=Depends(library_for)):
     try:
-        return library_for(request).add(body.name, body.text)
+        return library.add(body.name, body.text)
     except StorageConflictError:
         raise HTTPException(409, "Another prompt version was published at the same time. Try saving again.")

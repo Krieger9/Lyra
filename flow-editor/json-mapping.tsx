@@ -8,10 +8,10 @@ export type JsonNodeData = {
   baseText?: string;
   baseError?: string;
 };
-type Port = WireReference & { label: string; base?: JsonObject; structured: boolean; readAs?: "json" | "value" };
+type Port = WireReference & { label: string; base?: unknown; structured: boolean; readAs?: "json" | "value" };
 
 // Suggest existing fields, including fields with slashes or tildes in their names.
-function fieldPaths(base: JsonObject) {
+export function fieldPaths(base: unknown) {
   const paths: string[] = [];
   function visit(value: unknown, prefix: string) {
     if (!value || typeof value !== "object") return;

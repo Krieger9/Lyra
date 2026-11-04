@@ -18,7 +18,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from agent_store import definitions, metadata, seed_defaults
 from schema_migrations import apply_migrations, schema_transaction
 from app import app
-from auth import require_admin_access, require_chat_access, require_mcp_access
+from auth import require_admin_access, require_chat_access, require_design_access, require_mcp_access
 
 
 @unittest.skipUnless(os.getenv("LYRA_TEST_DATABASE_URL"), "Set LYRA_TEST_DATABASE_URL for isolated PostgreSQL checks")
@@ -232,6 +232,70 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await send("other user")).json()["reply"]["previous"], "initial")
             owner, conversation = "one", str(uuid4())
             self.assertEqual((await send("new chat")).json()["reply"]["previous"], "initial")
+
+    async def test_chat_context_update_failure_rolls_back_and_retry_returns_only_the_reply(self):
+        agent = (await self.client.post("/api/admin/agents", json={"name": "Memory writer",
+            "outputSchema": {"fields": [{"name": "Context", "type": "text"}]}})).json()
+        graph = self.flow_graph()
+        graph["stateObject"] = {"Context": "", "other": []}
+        graph["nodes"] += [
+            {"id": "answer", "type": "json", "position": {"x": 1, "y": 0},
+             "data": {"objectDefinition": {"base": {"answer": "public reply"}}}},
+            {"id": "memory", "type": "state", "position": {"x": 2, "y": 0}, "data": {"stateDefinition": {
+                "scope": "conversation", "key": "memory", "operation": "generateObject", "agentId": agent["id"],
+                "includeChatTurn": True, "mappings": [{"edgeId": "result", "source": ".value/Context", "target": "/Context"}]}}}]
+        graph["edges"] = [{"id": key, "source": source, "target": target} for key, source, target in [
+            ("in", "api-input", "answer"), ("out", "answer", "api-response"), ("reply", "api-response", "memory")]]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Memory", "graph": graph})).json()["id"]
+        self.assertEqual((await self.client.put("/api/admin/chat-flow/" + flow, json={"revision": 1})).status_code, 200)
+        def authenticate(request: Request):
+            request.state.chat_owner = "test owner"
+        model = AsyncMock(side_effect=['{"Context":"old"}', '{"wrong":"bad"}', '{"Context":"new"}'])
+        app.state.studio.model, app.state.studio.traces = SimpleNamespace(complete=model), Mock()
+        headers = {"X-Lyra-Conversation-Id": str(uuid4()), "X-Lyra-Turn-Id": str(uuid4())}
+        with patch.dict(app.dependency_overrides, {require_chat_access: authenticate}):
+            first = await self.client.post("/api/chat", json={"message": "first"}, headers=headers)
+            self.assertEqual(first.json(), {"reply": {"answer": "public reply"}})
+            headers["X-Lyra-Turn-Id"] = str(uuid4())
+            body = {"message": "correction", "history": [{"role": "user", "content": "first"}]}
+            self.assertEqual((await self.client.post("/api/chat", json=body, headers=headers)).status_code, 502)
+            success = await self.client.post("/api/chat", json=body, headers=headers)
+            self.assertEqual(success.json(), first.json())
+            replay = await self.client.post("/api/chat", json=body, headers=headers)
+            self.assertEqual(replay.headers["X-Lyra-Run-Id"], success.headers["X-Lyra-Run-Id"])
+        self.assertEqual(model.await_count, 3)
+        record = (await self.client.get("/api/admin/runs/" + success.headers["X-Lyra-Run-Id"])).json()
+        payload = json.loads(next(e["data"]["inputs"]["request"] for e in record["events"]
+                                  if e["kind"] == "template.started"))
+        self.assertEqual(payload["state"], {"Context": "old", "other": []})
+        self.assertEqual(payload["history"], body["history"])
+        self.assertEqual(payload["latestTurn"], {"user": "correction", "assistant": {"answer": "public reply"}})
+
+    async def test_state_agent_snapshot_and_structured_property_mapping(self):
+        schema = {"fields": [{"name": "recap", "type": "text"}]}
+        agent = (await self.client.post("/api/admin/agents", json=self.body | {"outputSchema": schema})).json()
+        graph = self.flow_graph()
+        graph["stateObject"] = {"summary": "", "other": []}
+        graph["nodes"].append({"id": "state", "type": "state", "position": {"x": 1, "y": 1},
+            "data": {"stateDefinition": {"key": "context", "scope": "run", "operation": "generateObject",
+                "agentId": agent["id"], "mappings": [{"edgeId": "result", "source": ".value/recap", "target": "/summary"}],
+                "output": "property", "outputProperty": "summary"}}})
+        graph["edges"] = [{"id": "in", "name": "message", "source": "api-input", "target": "state"},
+                          {"id": "out", "source": "state", "target": "api-response"}]
+        saved = await self.client.post("/api/admin/flows", json={"name": "Summarize", "graph": graph})
+        self.assertEqual(saved.status_code, 201, saved.text)
+        url = "/api/admin/flows/" + saved.json()["id"]
+        self.assertEqual((await self.client.get(url)).json()["graph"]["stateObject"], graph["stateObject"])
+        app.state.studio.model = SimpleNamespace(complete=AsyncMock(side_effect=['{"recap":"summary text"}', '{"wrong":42}']))
+        app.state.studio.traces = Mock()
+        run = await self.client.post(url + "/run", json={"input": "source text"})
+        self.assertEqual(run.text, "summary text")
+        record = (await self.client.get("/api/admin/runs/" + run.headers["X-Lyra-Run-Id"])).json()
+        self.assertIn(agent["id"], record["snapshot"]["agents"])
+        value = next(e["data"]["value"] for e in record["events"] if e["kind"] == "state.applied")
+        self.assertEqual(value, {"summary": "summary text", "other": []})
+        invalid = await self.client.post(url + "/run", json={"input": "source text"})
+        self.assertEqual(invalid.status_code, 502, invalid.text)
 
     async def test_provider_model_selection_for_agent_test_flow_and_pinned_chat(self):
         mids = [(await self.client.post("/api/admin/models", json={"name": name})).json()["id"]
@@ -502,6 +566,45 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conflict.status_code, 409)
         success = await self.client.post(url + "/run", json={"input": "hello"})
         self.assertEqual((success.status_code, success.text), (200, ""))
+
+    async def test_mcp_design_changes_are_visible_in_admin(self):
+        from app import design_server
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
+        with patch.dict(app.dependency_overrides, {require_design_access: lambda: None}):
+            async with design_server.session_manager.run(), streamable_http_client(
+                "http://localhost:8765/mcp/design", http_client=self.client) as (reader, writer, _):
+                async with ClientSession(reader, writer) as session:
+                    await session.initialize()
+                    listing = await session.list_tools()
+                    self.assertIn("update_flow", {tool.name for tool in listing.tools})
+
+                    async def call(name, **arguments):
+                        reply = await session.call_tool(name, arguments)
+                        self.assertFalse(reply.isError, reply.content)
+                        return reply.structuredContent
+
+                    prompt = await call("publish_prompt", body={"name": "request", "text": "Updated"})
+                    self.assertEqual(prompt["version"], 2)
+                    agent = await call("create_agent", body=self.body)
+                    edit = self.body | {"name": "Reviewer", "revision": 1, "prompt": {"name": "request", "version": 2}}
+                    await call("update_agent", agent_id=agent["id"], body=edit)
+                    catalog = await call("get_catalog")
+                    self.assertEqual(catalog["agents"][0]["prompt"], edit["prompt"])
+                    self.assertEqual(catalog, (await self.client.get("/api/admin/catalog")).json())
+
+                    draft = {"name": "MCP draft", "graph": self.flow_graph()}
+                    flow = await call("create_flow", body=draft)
+                    args = {"flow_id": flow["id"], "body": draft | {"revision": 1, "name": "Edited"}}
+                    updated = await call("update_flow", **args)
+                    conflict = await session.call_tool("update_flow", args)
+                    self.assertTrue(conflict.isError)
+                    self.assertIn("Reopen", conflict.content[0].text)
+                    self.assertEqual(updated["revision"], 2)
+                    self.assertEqual((await call("list_flows"))["result"][0]["name"], "Edited")
+                    self.assertEqual(await call("get_flow", flow_id=flow["id"]), updated)
+                    self.assertEqual((await self.client.get("/api/admin/flows/" + flow["id"])).json(), updated)
 
     async def test_flow_response_returns_exact_agent_output_and_errors(self):
         agent = (await self.client.post("/api/admin/agents", json={"name": "Raw agent"})).json()

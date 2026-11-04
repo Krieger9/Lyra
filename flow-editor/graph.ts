@@ -13,7 +13,7 @@ export type Agent = Node<{ label: string; definition: AgentDefinition | null; in
 export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent | SwitchItem | StateItem;
 export type PanelSize = { width: number; height: number };
 type SavedNode = Exclude<FlowItem, Agent> | Node<Omit<Agent["data"], "definition"> & { definition: { id: string } | null }, "agent">;
-export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize };
+export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize; stateObject?: Record<string, unknown> };
 
 export type Wire = Edge & { name?: string | null; readAs?: "value" | "json" };
 
@@ -41,8 +41,9 @@ export function nameExistingWires(wires: Wire[]): Wire[] {
 export const otherwise = { id: "otherwise", label: "Otherwise" };
 export const ports = (data: SwitchItem["data"]) => [...(data.switchDefinition?.paths ?? []), otherwise];
 
-export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewport, panelSize: PanelSize) {
+export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewport, panelSize: PanelSize, stateObject = {}) {
   return {
+    ...(Object.keys(stateObject).length ? {stateObject} : {}),
     nodes: items.map(node => ({
       id: node.id, type: node.type, position: node.position,
       data: { label: node.data.label, definition: node.type === "agent" && node.data.definition
@@ -61,7 +62,7 @@ export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewpo
 
 // Only port IDs and upstream schemas affect the field picker. Editing a check
 // or dragging a card should not invalidate an in-progress selection.
-export function switchFieldGraph(id: string, items: FlowItem[], edges: Wire[]) {
+export function switchFieldGraph(id: string, items: FlowItem[], edges: Wire[], stateObject = {}) {
   const ancestors = new Set<string>();
   function visit(key: string) {
     if (ancestors.has(key)) return;
@@ -72,7 +73,7 @@ export function switchFieldGraph(id: string, items: FlowItem[], edges: Wire[]) {
   const upstream = items.filter(node => ancestors.has(node.id) || node.type === "apiInput" || node.type === "apiResponse");
   const { nodes, edges: connections } = graphDocument(upstream, edges.filter(edge => ancestors.has(edge.target)),
     { x: 0, y: 0, zoom: 1 }, { width: 0, height: 0 });
-  return { nodes: nodes.map(node => ({ ...node, position: { x: 0, y: 0 }, data: { ...node.data, label: "",
+  return { stateObject, nodes: nodes.map(node => ({ ...node, position: { x: 0, y: 0 }, data: { ...node.data, label: "",
     switchDefinition: node.data.switchDefinition && {
       paths: node.data.switchDefinition.paths.map(p => ({ id: p.id, label: "" }))
     } } })), edges: connections };
@@ -111,13 +112,14 @@ export function allowsConnection(items: FlowItem[], edges: Wire[], connection: C
   const source = items.find(item => item.id === connection.source);
   const target = items.find(item => item.id === connection.target);
   if (!source || !target || source.id === target.id) return false;
-  if (!["apiInput", "agent", "json", "switch", "state"].includes(source.type!)) return false;
+  if (source.type === "apiResponse" && target.type !== "state") return false;
+  if (!["apiInput", "apiResponse", "agent", "json", "switch", "state"].includes(source.type!)) return false;
   if (source.type === "switch" && !ports(source.data).some(port => port.id === connection.sourceHandle)) return false;
   if (target.type === "apiResponse") {
     if (source.type === "apiInput") return false;
-  } else if (target.type === "switch" || target.type === "state") {
+  } else if (target.type === "switch") {
     if (edges.some(edge => edge.id !== replacedEdgeId && edge.target === target.id)) return false;
-  } else if (target.type !== "agent" && target.type !== "json") return false;
+  } else if (target.type !== "agent" && target.type !== "json" && target.type !== "state") return false;
   return !edges.some(edge => edge.id !== replacedEdgeId && edge.source === source.id && edge.target === target.id &&
     (edge.sourceHandle ?? null) === (connection.sourceHandle ?? null));
 }

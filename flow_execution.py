@@ -30,7 +30,7 @@ def plan_flow(graph, agents, observe=None):
                 pending.append(target)
     # Every connected branch must be valid before any model is called.
     plan, visiting, completed = [], set(), {"api-input"}
-    fields = FlowFields(nodes, incoming, agents)
+    fields = FlowFields(nodes, incoming, agents, graph.stateObject)
     required_paths = {"api-input": {}}
     ancestors = {"api-input": set()}
     state_accesses = {}
@@ -65,10 +65,11 @@ def plan_flow(graph, agents, observe=None):
         ancestors[node_id] = {edge.source for edge in parents}
         for edge in parents:
             ancestors[node_id].update(ancestors[edge.source])
-        if node.type == "state" and len(parents) != 1:
-            raise HTTPException(422, "Each connected State requires one input.")
         if node.type == "state":
             definition = node.data.stateDefinition
+            definition.validate_setup(graph.stateObject, parents, agents)
+            if len({edge.name or edge.id for edge in parents}) != len(parents):
+                raise MappingError("State inputs need distinct wire names.")
             accesses = state_accesses.setdefault((definition.scope, definition.key), [])
             for other in accesses:
                 guard = required_paths[other.id]
@@ -79,14 +80,15 @@ def plan_flow(graph, agents, observe=None):
                 if (definition.operation, previous.operation) != ("read", "read") or definition.initial != previous.initial:
                     raise HTTPException(422, f"Connect the State accesses for '{definition.key}' in execution order.")
             accesses.append(node)
-        if node.type in ("agent", "json", "switch", "state"):
+        if node.type in ("agent", "json", "switch", "state", "apiResponse"):
             plan.append(node)
         visiting.remove(node_id)
         completed.add(node_id)
 
     for node in graph.nodes:
-        if node.id in reached or node.id == "api-response":
+        if node.id in reached and node.id != "api-response":
             visit(node.id)
+    visit("api-response")
     return plan, incoming
 
 
@@ -94,11 +96,11 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
     plan, incoming = plan_flow(graph, agents, run)
     state = {"run": {}, "conversation": conversation_state if conversation_state is not None else {}}
     run.node = None
-    run.emit("plan.ready", order=["api-input", *[n.id for n in plan], "api-response"])
+    run.emit("plan.ready", order=["api-input", *[n.id for n in plan]])
     outputs = {}
     selected_paths = {}
     nodes = {n.id: n for n in graph.nodes}
-    for node in [nodes["api-input"], *plan, nodes["api-response"]]:
+    for node in [nodes["api-input"], *plan]:
         run.node = node.id
         start = perf_counter()
         connections = incoming[node.id]
@@ -125,7 +127,22 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
             output = assemble(node.data.objectDefinition, inputs, {e.id: e.readAs for e in parents}, run.emit)
         elif node.type == "state":
             definition = node.data.stateDefinition
-            output = definition.apply(state[definition.scope], inputs[parents[0].id])
+            bucket = state[definition.scope]
+            named = {edge.name or edge.id: inputs[edge.id] for edge in parents}
+            incoming_value = inputs[parents[0].id] if len(parents) == 1 else named
+            write_value = inputs if definition.operation == "map" else incoming_value
+            if definition.operation in ("generate", "generateObject"):
+                current = graph.stateObject | bucket.get(definition.key, definition.initial)
+                payload = {"state": current, "inputs": named}
+                if definition.includeChatTurn:
+                    chat = chat_context or ChatRequest.from_wire(value)
+                    payload["history"] = [turn.model_dump() for turn in chat.history]
+                    payload["latestTurn"] = {"user": chat.message, "assistant": outputs["api-response"]}
+                result = await run_agent(library, studio, agents[str(definition.agentId)], payload, run.emit)
+                write_value = {"result": result} if definition.operation == "generateObject" else result
+            current = definition.apply(bucket, write_value, graph.stateObject, run.emit)
+            run.emit("state.applied", key=definition.key, scope=definition.scope, operation=definition.operation, value=current)
+            output = definition.project(current, inputs, incoming_value)
         elif node.type == "switch":
             output = inputs[parents[0].id]
             path_id, label = node.data.switchDefinition.select(output)
@@ -147,8 +164,6 @@ async def perform(document: FlowSnapshot, library, studio, value, run, chat_cont
     try:
         result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio,
                                                 value, run, chat_context, turn.objects if turn else None), RUN_TIMEOUT)
-        if turn and not isinstance(result, (str, dict)):
-            raise MappingError("Chat requires a text or object response.")
         run.finish("completed", result=result, turn=turn)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)

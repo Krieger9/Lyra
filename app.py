@@ -27,6 +27,7 @@ from flow_execution import perform
 from run_store import Run, activation
 from run_api import router as run_router
 from run_mcp import install_mcp
+from design_mcp import install_design_mcp
 from model_adapter import MeteredOllamaAdapter
 from chat_input import ChatRequest
 from conversation_state import open_turn
@@ -61,7 +62,7 @@ class RevalidatingStaticFiles(StaticFiles):
 
 
 class ChatReply(BaseModel):
-    reply: str | dict[str, JsonValue]
+    reply: JsonValue
 
 
 @asynccontextmanager
@@ -89,7 +90,7 @@ async def lifespan(app: FastAPI):
             PromptStudioAdapter(library), MeteredOllamaAdapter(endpoint, model),
             traces,
         )
-        async with mcp_server.session_manager.run():
+        async with mcp_server.session_manager.run(), design_server.session_manager.run():
             yield
     finally:
         storage.engine.dispose()
@@ -101,6 +102,7 @@ app.include_router(providers_router)
 app.include_router(flows_router)
 app.include_router(run_router)
 mcp_server = install_mcp(app)
+design_server = install_design_mcp(app)
 MSAL = ROOT / "node_modules/@azure/msal-browser/lib"
 
 

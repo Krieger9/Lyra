@@ -79,10 +79,11 @@ def text_fields(value, path=""):
 class FlowFields:
     """Resolve text paths to choices (or an empty list for free text) through wire mappings."""
 
-    def __init__(self, nodes, incoming, agents):
+    def __init__(self, nodes, incoming, agents, state_object=None):
         self.nodes = nodes
         self.incoming = incoming
         self.agents = agents
+        self.state_object = state_object or {}
         self.cache = {}
         self.visiting = set()
 
@@ -102,7 +103,15 @@ class FlowFields:
     def _resolve(self, node):
         parents = self.incoming[node.id]
         if node.type == "state":
-            return dict(text_fields(node.data.stateDefinition.initial))
+            state = node.data.stateDefinition
+            if state.output == "input":
+                if state.outputWire or len(parents) == 1:
+                    edge = next((e for e in parents if not state.outputWire or e.id == state.outputWire), None)
+                    return self.output(edge.source) if edge else {}
+                return {"/" + (e.name or e.id).replace("~", "~0").replace("/", "~1") + path: choices
+                        for e in parents for path, choices in self.output(e.source).items()}
+            base = self.state_object | state.initial
+            return dict(text_fields(base.get(state.outputProperty) if state.output == "property" else base))
         if node.type == "switch" and len(parents) == 1:
             return self.output(parents[0].source)
         if node.type == "apiInput":
