@@ -7,7 +7,7 @@ import type { InputSelection } from "./chat-input";
 
 export type GenericItem = Node<{ label: string }, "item">;
 export type JsonItem = Node<JsonNodeData, "json">;
-export type ApiInput = Node<{ label: string; chatInput?: boolean }, "apiInput">;
+export type ApiInput = Node<{ label: string; chatInput?: boolean; recallMemories?: boolean }, "apiInput">;
 export type ApiResponse = Node<{ label: string }, "apiResponse">;
 export type Agent = Node<{ label: string; definition: AgentDefinition | null; inputSelection?: InputSelection | null }, "agent">;
 export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent | SwitchItem | StateItem;
@@ -49,6 +49,7 @@ export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewpo
       data: { label: node.data.label, definition: node.type === "agent" && node.data.definition
         ? { id: node.data.definition.id } : null,
         ...(node.type === "apiInput" && node.data.chatInput ? { chatInput: true } : {}),
+        ...(node.type === "apiInput" ? { recallMemories: node.data.recallMemories ?? true } : {}),
         ...(node.type === "agent" && node.data.inputSelection ? { inputSelection: node.data.inputSelection } : {}),
         ...(node.type === "json" ? { objectDefinition: node.data.objectDefinition ?? null } : {}),
         ...(node.type === "state" ? { stateDefinition: node.data.stateDefinition } : {}),

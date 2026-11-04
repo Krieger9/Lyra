@@ -57,3 +57,6 @@ dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   #sidebar, .rail { transition: none; }
 }
+.memory-search { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.memory-turn-list li { display: block; overflow-wrap: anywhere; }
+.memory-turn-list p { white-space: pre-wrap; }

@@ -1,7 +1,8 @@
 name: lyra-studios
 services:
   postgres:
-    image: postgres:18-alpine
+    build: ./postgres
+    image: lyra-postgres:18-pgvector
     restart: "no"
     environment:
       POSTGRES_DB: lyra

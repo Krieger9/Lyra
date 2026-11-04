@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 
 from agent_store import metadata
 from flow_graph import FlowSnapshot
+from memory_store import memories_for_run
 
 RUN_TIMEOUT = 120
 runs = Table("flow_runs", metadata,
@@ -56,10 +57,13 @@ class Run:
         with self.engine.begin() as conn:
             self._append(conn, kind, data)
 
-    def finish(self, status, result=None, error=None, turn=None):
+    def finish(self, status, result=None, error=None, turn=None, memory=None):
         with self.engine.begin() as conn:
             if turn is not None:
                 turn.commit(conn, self.id)
+            if memory is not None:
+                links = memory.commit(conn, self.id)
+                self._append(conn, "memory.committed", {"count": len(memory.pending), "memories": links})
             if error and self.node:
                 self._append(conn, "node.failed", {"error": error})
             self.node = None
@@ -122,4 +126,5 @@ def inspect_run(library, run_id, after=0, limit=100, include_snapshot=True):
         page = conn.execute(select(events.c.seq, events.c.node, events.c.kind, events.c.at,
             events.c.elapsed_ms, events.c.data).where(events.c.run_id == run_id, events.c.seq > after)
             .order_by(events.c.seq).limit(limit+1)).mappings().all()
-        return run_summary(row) | {"schemaVersion": 1, "events": [dict(e) for e in page[:limit]], "hasMore": len(page)>limit}
+        return run_summary(row) | {"schemaVersion": 1, "events": [dict(e) for e in page[:limit]], "hasMore": len(page)>limit,
+                                   "memories": memories_for_run(conn, library.name, run_id)}

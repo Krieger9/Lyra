@@ -83,6 +83,8 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_definition_endpoints_require_admin_scope_and_role(self):
         requests = [
+            ("GET", "/api/admin/memories"),
+            ("GET", "/api/admin/memories/" + str(uuid4())),
             ("POST", "/mcp"),
             ("POST", "/mcp/design"),
             ("GET", "/api/admin/runs"),

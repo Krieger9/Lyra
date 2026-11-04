@@ -9,7 +9,9 @@ type Graph = { nodes: { id: string; type: string; position: { x: number; y: numb
 type Document = { id: string; name: string; revision: number; graph: Graph };
 type Entry = { seq: number; node: string | null; kind: string; at: string; elapsed_ms: number; data: Record<string, unknown> };
 type Summary = { id: string; source: string; revision: number; status: string; started_at: string };
-type RecordPage = Summary & { snapshot?: Document; events: Entry[]; hasMore: boolean; result: unknown; error?: string };
+type MemoryLink = {id: string; content: string; relation: "created" | "reinforced" | "recalled"; node: string; evidence?: string};
+type RecordPage = Summary & { snapshot?: Document; events: Entry[]; hasMore: boolean; result: unknown; error?: string;
+  memories?: MemoryLink[] };
 type Binding = Pick<Document, "id" | "name" | "revision">;
 const api = <T,>(path: string, options?: RequestInit) => window.lyraAdminRequest<T>("/api/admin" + path, options);
 const json = (method: string, body: unknown) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -19,6 +21,9 @@ const message = (failure: unknown) => failure instanceof Error ? failure.message
 function eventLabel(event: Entry) {
   const data = event.data;
   switch (event.kind) {
+    case "memory.recalled": return `Recalled ${data.count ?? (data.ids as unknown[] | undefined)?.length ?? 0} memories`;
+    case "memory.extracted": return `Selected ${data.count} memories to save`;
+    case "memory.committed": return `Committed ${data.count} memory selections`;
     case "switch.selected": return `Selected path · ${data.label}`;
     case "node.skipped": return "Skipped · inactive input path";
     case "gate.evaluated": return `${data.passed ? "Pass" : "Fail"} · ${data.field ?? "output"} · ${data.operation}`;
@@ -212,6 +217,12 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
           <small>{run.id}</small>{run.error && <p role="alert">{run.error}</p>}
           {run.status==="completed" && <pre>{pretty(run.result)}</pre>}
           <button disabled={run.status==="running" || run.hasMore} onClick={()=>download(run)}>Export run JSON</button>
+          <h3>Memories associated with this turn</h3>
+          {(run.memories ?? []).length ? <ul>{run.memories!.map(memory => <li key={`${memory.id}:${memory.relation}:${memory.node}`}>
+            <strong>{memory.relation === "created" ? "Created" : memory.relation === "reinforced" ? "Reinforced" : "Recalled"}</strong>
+            {" · "}<a href={`/admin/memories/?id=${encodeURIComponent(memory.id)}`}>{memory.content}</a>
+            {memory.evidence && <blockquote>{memory.evidence}</blockquote>}
+          </li>)}</ul> : <p>No committed memory links for this turn.</p>}
           <h3 ref={timeline}>{selected?.data.label || "Execution timeline"}</h3>
           {selected && <button onClick={()=>selectNode("")}>Show all steps</button>}
           {calls.length > 0 && <p>{calls.length} model {calls.length === 1 ? "call" : "calls"} · {calls.reduce((sum,e)=>sum+Number(e.data.duration_ms),0)} ms

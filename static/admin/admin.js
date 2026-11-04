@@ -91,6 +91,10 @@ async function loadHome() {
     await mountConfiguration(page);
   }
   let flowLookupError;
+  if (page === "memories") {
+    const { mountMemories } = await import(assetUrl("/admin/memories.js"));
+    await mountMemories();
+  }
   if (page === "flow") {
     const stylesheet = document.createElement("link");
     stylesheet.rel = "stylesheet";
@@ -123,6 +127,7 @@ async function loadHome() {
     flow: "Drag from a right output port to an Agent’s left input port to connect them.",
     agents: "Define reusable agents using instructions and prompts from PromptStudio.",
     prompts: "Manage the versioned Lyra prompt library.",
+    memories: "Browse saved memories and the turns that created, reinforced or recalled them.",
   };
   statusLine.textContent = flowLookupError || descriptions[page];
 }

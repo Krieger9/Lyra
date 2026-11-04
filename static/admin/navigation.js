@@ -3,6 +3,7 @@ const sections = {
   "/admin/agents/": "Agents",
   "/admin/prompts/": "PromptStudio",
   "/admin/flow/": "Flow View",
+  "/admin/memories/": "Memories",
   "/admin/providers/": "Providers",
   "/admin/models/": "Models",
   "/admin/model-groups/": "Model groups",

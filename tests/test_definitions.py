@@ -24,6 +24,9 @@ from auth import require_admin_access, require_chat_access, require_design_acces
 @unittest.skipUnless(os.getenv("LYRA_TEST_DATABASE_URL"), "Set LYRA_TEST_DATABASE_URL for isolated PostgreSQL checks")
 class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        memory_config = patch.dict(os.environ, {"LYRA_MEMORY_ENABLED": "false"})
+        memory_config.start()
+        self.addCleanup(memory_config.stop)
         self.schema = "lyra_definition_test_" + uuid4().hex
         self.storage = SQLAlchemyStorage.from_postgres_url(os.environ["LYRA_TEST_DATABASE_URL"])
         self.engine = self.storage.engine
@@ -296,6 +299,91 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value, {"summary": "summary text", "other": []})
         invalid = await self.client.post(url + "/run", json={"input": "source text"})
         self.assertEqual(invalid.status_code, 502, invalid.text)
+
+    async def test_memory_capture_recall_replay_and_transaction_rollback(self):
+        agent = (await self.client.post("/api/admin/agents", json={"name": "Answer"})).json()
+        updater = (await self.client.post("/api/admin/agents", json={"name": "Context updater"})).json()
+        graph = self.flow_graph()
+        graph["stateObject"] = {"Context": ""}
+        graph["nodes"] += [
+            {"id": "answer", "type": "agent", "position": {"x": 1, "y": 0},
+             "data": {"definition": {"id": agent["id"], "revision": 1}}},
+            {"id": "update", "type": "state", "position": {"x": 2, "y": 0},
+             "data": {"stateDefinition": {"scope": "conversation", "key": "context", "operation": "generate",
+                 "property": "Context", "agentId": updater["id"], "includeChatTurn": True}}}]
+        graph["edges"] = [{"id": key, "source": source, "target": target} for key, source, target in [
+            ("in", "api-input", "answer"), ("out", "answer", "api-response"), ("after", "api-response", "update")]]
+        saved = await self.client.post("/api/admin/flows", json={"name": "Memories", "graph": graph})
+        self.assertEqual(saved.status_code, 201, saved.text)
+        flow = saved.json()["id"]
+        self.assertEqual((await self.client.put("/api/admin/chat-flow/" + flow, json={"revision": 1})).status_code, 200)
+        owner = "one"
+
+        def authenticate(request: Request):
+            request.state.chat_owner = owner
+
+        headers = {"X-Lyra-Conversation-Id": str(uuid4()), "X-Lyra-Turn-Id": str(uuid4())}
+        body = {"message": "I prefer tea"}
+        extraction = json.dumps({"memories": [{"content": "User prefers tea", "kind": "preference",
+                                                "evidence": "I prefer tea"}]})
+        model = AsyncMock(side_effect=["reply", "context", extraction])
+        app.state.studio.model, app.state.studio.traces = SimpleNamespace(complete=model), Mock()
+        from memory_store import EMBEDDING_DIMENSIONS
+        embedding = [1.0] + [0.0] * (EMBEDDING_DIMENSIONS - 1)
+        from memory_store import save_memories
+
+        def fail_after_write(*args):
+            save_memories(*args)
+            raise RuntimeError("Injected commit failure")
+
+        with patch.dict(os.environ, {"LYRA_MEMORY_ENABLED": "true"}), \
+                patch.dict(app.dependency_overrides, {require_chat_access: authenticate}), \
+                patch("memory.embed", new=AsyncMock(side_effect=lambda texts: [embedding for _ in texts])) as embed:
+            with patch("memory.save_memories", side_effect=fail_after_write):
+                failed = await self.client.post("/api/chat", json=body, headers=headers)
+            self.assertEqual(failed.status_code, 503, failed.text)
+            with self.storage.engine.connect() as conn:
+                for table in ("memories", "memory_embeddings", "memory_turns", "flow_state_turns"):
+                    self.assertEqual(conn.execute(text(f"SELECT count(*) FROM {self.schema}.{table}")).scalar(), 0)
+            model.side_effect = ["reply", "context", extraction]
+            first = await self.client.post("/api/chat", json=body, headers=headers)
+            self.assertEqual(first.status_code, 200, first.text)
+            calls = embed.await_count
+            replay = await self.client.post("/api/chat", json=body, headers=headers)
+            self.assertEqual(replay.headers["X-Lyra-Run-Id"], first.headers["X-Lyra-Run-Id"])
+            self.assertEqual(embed.await_count, calls)
+            found = await self.client.post("/api/memories/search", json={"query": "tea", "mode": "text"})
+            self.assertEqual(len(found.json()["memories"]), 1)
+            self.assertEqual(found.json()["memories"][0]["source"]["runId"], first.headers["X-Lyra-Run-Id"])
+            memory_id = found.json()["memories"][0]["id"]
+            detail = await self.client.get("/api/memories/" + memory_id)
+            self.assertEqual(detail.headers["cache-control"], "no-store")
+            self.assertEqual(detail.json()["turns"][0]["turn_id"], headers["X-Lyra-Turn-Id"])
+            related = await self.client.get("/api/memories/turns/" + first.headers["X-Lyra-Run-Id"])
+            self.assertEqual(related.json()["memories"][0]["id"], memory_id)
+            inspected = await self.client.get("/api/admin/runs/" + first.headers["X-Lyra-Run-Id"])
+            self.assertEqual(inspected.json()["memories"][0]["relation"], "created")
+            # Recall crosses conversations for the same owner.
+            headers = {"X-Lyra-Conversation-Id": str(uuid4()), "X-Lyra-Turn-Id": str(uuid4())}
+            model.side_effect = ["tea", "new context", '{"memories":[]}']
+            second = await self.client.post("/api/chat", json={"message": "Which drink?"}, headers=headers)
+            self.assertEqual(second.status_code, 200, second.text)
+            answer_prompt = model.await_args_list[-3].args[0]
+            self.assertIn("User prefers tea", answer_prompt)
+            updater_payload = json.loads(model.await_args_list[-1].args[0][1]["content"])
+            self.assertEqual(updater_payload["recalledMemories"][0]["content"], "User prefers tea")
+            self.assertEqual(updater_payload["latestTurn"], {"user": "Which drink?", "assistant": "tea"})
+            owner = "two"
+            self.assertEqual((await self.client.get("/api/memories/" + memory_id)).status_code, 404)
+            self.assertEqual((await self.client.get("/api/memories/turns/" + first.headers["X-Lyra-Run-Id"])).json(),
+                             {"memories": []})
+            self.assertEqual((await self.client.post("/api/memories/search",
+                json={"query": "tea"})).json()["memories"], [])
+            headers["X-Lyra-Turn-Id"] = str(uuid4())
+            model.side_effect = ["unknown", "context", '{"memories":[]}']
+            other = await self.client.post("/api/chat", json={"message": "Which drink?"}, headers=headers)
+            self.assertEqual(other.status_code, 200, other.text)
+            self.assertNotIn("User prefers tea", model.await_args_list[-3].args[0])
 
     async def test_provider_model_selection_for_agent_test_flow_and_pinned_chat(self):
         mids = [(await self.client.post("/api/admin/models", json={"name": name})).json()["id"]

@@ -11,6 +11,7 @@ import { JsonMappingInspector } from "./json-mapping";
 import { AgentOutput } from "./agent-output";
 import { SelectionEditor } from "./chat-input";
 import { RunView } from "./run-view";
+import { MemoryStatus } from "./memory-status";
 import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
 import { StateCard, StateInspector, StateObjectEditor, newState } from "./state";
 import { WireSettings } from "./wires";
@@ -59,7 +60,8 @@ function ApiInputCard({ data }: NodeProps<ApiInput>) {
         <path d="M14 4h5a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-5M3 12h12m-5-5 5 5-5 5" />
       </svg>
     </span>
-    <div><span className="item-kind">Flow start</span><strong>{data.label}</strong></div>
+    <div><span className="item-kind">Flow start</span><strong>{data.label}</strong>
+      {(data.recallMemories ?? true) && <small>Recall long-term memories</small>}</div>
     <Handle type="source" position={Position.Right} title="API Input output" className="flow-port" />
   </div>;
 }
@@ -420,6 +422,7 @@ function Editor() {
     </div>
     {(items.some(node => node.type === "state") || Object.keys(stateObject).length > 0) &&
       <StateObjectEditor properties={stateObject} change={setStateObject} />}
+    <MemoryStatus />
     <div className={`flow-grid${resizing ? " resizing" : ""}`} ref={grid}>
       <div className="flow-canvas" onKeyDown={event => {
         if (!removable || event.repeat || event.defaultPrevented || (event.key !== "Delete" && event.key !== "Backspace")) return;
@@ -497,6 +500,10 @@ function Editor() {
             <option value="chat">Chat request with history</option>
           </select></label>
           {selected.data.chatInput && <p>Outputs <code>message</code> and an ordered <code>history</code> of prior turns.</p>}
+          <label><input type="checkbox" checked={selected.data.recallMemories ?? true}
+            onChange={e => updateNodeData(selected.id, {recallMemories:e.target.checked})} />Recall long-term memories</label>
+          <p>Search saved memories using the latest message and prior context. Relevant facts are supplied to agents
+            before they answer, including in a new chat. Inspect API Input in run history to see the recalled memories.</p>
         </>}
         {selected?.type === "apiResponse" && <>
           <strong>API Response</strong>

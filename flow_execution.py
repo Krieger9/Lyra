@@ -5,12 +5,13 @@ from time import perf_counter
 
 from fastapi import HTTPException
 
-from agent_output import run_agent
+from agent_output import ObservedModel, run_agent
 from chat_input import ChatRequest
 from flow_graph import FlowSnapshot, path_requirements
 from flow_switch import FlowFields
 from json_mapping import MappingError, assemble, validate_mappings
 from run_store import RUN_TIMEOUT
+from model_adapter import provider_model
 
 
 def plan_flow(graph, agents, observe=None):
@@ -92,11 +93,19 @@ def plan_flow(graph, agents, observe=None):
     return plan, incoming
 
 
-async def execute(graph, agents, library, studio, value, run, chat_context=None, conversation_state=None):
+async def execute(graph, agents, library, studio, value, run, chat_context=None, conversation_state=None,
+                  memory=None):
     plan, incoming = plan_flow(graph, agents, run)
     state = {"run": {}, "conversation": conversation_state if conversation_state is not None else {}}
     run.node = None
     run.emit("plan.ready", order=["api-input", *[n.id for n in plan]])
+    input_node = next(node for node in graph.nodes if node.id == "api-input")
+    if memory and input_node.data.recallMemories:
+        run.node = "api-input"
+        await memory.recall(chat_context, state["conversation"])
+        run.emit("memory.recalled", count=len(memory.recalled), memories=memory.recalled,
+                 ids=[str(item["id"]) for item in memory.recalled])
+        run.node = None
     outputs = {}
     selected_paths = {}
     nodes = {n.id: n for n in graph.nodes}
@@ -138,7 +147,19 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
                     chat = chat_context or ChatRequest.from_wire(value)
                     payload["history"] = [turn.model_dump() for turn in chat.history]
                     payload["latestTurn"] = {"user": chat.message, "assistant": outputs["api-response"]}
-                result = await run_agent(library, studio, agents[str(definition.agentId)], payload, run.emit)
+                    if memory:
+                        payload["recalledMemories"] = memory.recalled
+                result = await run_agent(library, studio, agents[str(definition.agentId)], payload, run.emit,
+                                         memories=memory.recalled if memory else None)
+                if memory and definition.includeChatTurn and definition.captureMemories:
+                    agent = agents[str(definition.agentId)]
+                    selection = agent.get("modelSelection")
+                    model = provider_model(agent["endpoint"], selection["model"]) if selection else studio.model
+                    before = len(memory.pending)
+                    await memory.capture(payload, ObservedModel(model, run.emit), node.id)
+                    selected = memory.pending[before:]
+                    run.emit("memory.extracted", count=len(selected),
+                             memories=[{key: item[key] for key in ("content", "kind", "evidence")} for item in selected])
                 write_value = {"result": result} if definition.operation == "generateObject" else result
             current = definition.apply(bucket, write_value, graph.stateObject, run.emit)
             run.emit("state.applied", key=definition.key, scope=definition.scope, operation=definition.operation, value=current)
@@ -152,19 +173,20 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
         else:
             definition = agents[str(node.data.definition.id)]
             output = await run_agent(library, studio, definition, inputs[parents[0].id], run.emit,
-                                     selection=node.data.inputSelection, chat_context=chat_context)
+                                     selection=node.data.inputSelection, chat_context=chat_context,
+                                     memories=memory.recalled if memory else None)
         outputs[node.id] = output
         run.emit("node.completed", output=output, duration_ms=round((perf_counter()-start)*1000))
     run.node = None
     return outputs["api-response"]
 
 
-async def perform(document: FlowSnapshot, library, studio, value, run, chat_context=None, turn=None):
+async def perform(document: FlowSnapshot, library, studio, value, run, chat_context=None, turn=None, memory=None):
     run.emit("run.started", input=value)
     try:
         result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio,
-                                                value, run, chat_context, turn.objects if turn else None), RUN_TIMEOUT)
-        run.finish("completed", result=result, turn=turn)
+            value, run, chat_context, turn.objects if turn else None, memory), RUN_TIMEOUT)
+        run.finish("completed", result=result, turn=turn, memory=memory)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)
         raise

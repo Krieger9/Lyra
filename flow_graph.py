@@ -45,6 +45,7 @@ class AgentReference(BaseModel):
 class NodeData(BaseModel):
     label: str = Field(default="", max_length=120)
     chatInput: bool = False
+    recallMemories: bool = True
     inputSelection: InputSelection | None = None
     definition: AgentReference | None = None
     objectDefinition: ObjectDefinition | None = None

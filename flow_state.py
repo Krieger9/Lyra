@@ -15,6 +15,7 @@ class StateDefinition(BaseModel, extra="forbid"):
     mappings: list[FieldMapping] = Field(default_factory=list, max_length=64)
     agentId: UUID | None = None
     includeChatTurn: bool = False
+    captureMemories: bool = True
     property: str = Field(default="", max_length=80)
     output: Literal["state", "property", "input"] = "state"
     outputProperty: str = Field(default="", max_length=80)

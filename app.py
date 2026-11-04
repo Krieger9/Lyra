@@ -31,6 +31,7 @@ from design_mcp import install_design_mcp
 from model_adapter import MeteredOllamaAdapter
 from chat_input import ChatRequest
 from conversation_state import open_turn
+from memory import MemorySession, memory_enabled, router as memory_router
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -101,6 +102,7 @@ app.include_router(definitions_router)
 app.include_router(providers_router)
 app.include_router(flows_router)
 app.include_router(run_router)
+app.include_router(memory_router)
 mcp_server = install_mcp(app)
 design_server = install_design_mcp(app)
 MSAL = ROOT / "node_modules/@azure/msal-browser/lib"
@@ -130,6 +132,7 @@ def admin_home(request: Request, response: Response):
 
 
 @app.get("/admin/providers/", include_in_schema=False)
+@app.get("/admin/memories/", include_in_schema=False)
 @app.get("/admin/models/", include_in_schema=False)
 @app.get("/admin/model-groups/", include_in_schema=False)
 @app.get("/admin/protocols/", include_in_schema=False)
@@ -175,7 +178,8 @@ async def chat(body: ChatRequest, request: Request, response: Response,
     document = activation(library)
     if document:
         turn = None
-        if any(n.type == "state" and n.data.stateDefinition.scope == "conversation" for n in document.graph.nodes):
+        use_memory = memory_enabled()
+        if use_memory or any(n.type == "state" and n.data.stateDefinition.scope == "conversation" for n in document.graph.nodes):
             if not x_lyra_conversation_id or not x_lyra_turn_id:
                 raise HTTPException(422, "This Flow requires X-Lyra-Conversation-Id and X-Lyra-Turn-Id.")
             turn, replay = open_turn(library, request.state.chat_owner, document.id,
@@ -190,7 +194,9 @@ async def chat(body: ChatRequest, request: Request, response: Response,
         response.headers["X-Lyra-Flow-Id"] = str(document.id)
         try:
             value = body.model_dump() if document.graph.chat_input else body.message
-            reply = await perform(document, library, studio, value, run, body, turn)
+            memory = MemorySession(library, request.state.chat_owner, x_lyra_conversation_id,
+                                   x_lyra_turn_id) if use_memory else None
+            reply = await perform(document, library, studio, value, run, body, turn, memory)
         except HTTPException as exc:
             raise HTTPException(exc.status_code, "Chat flow failed. An administrator can inspect the run.",
                                 headers={"X-Lyra-Run-Id": str(run.id), "X-Lyra-Flow-Id": str(document.id)}) from exc

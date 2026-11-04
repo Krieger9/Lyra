@@ -120,3 +120,19 @@ class StateFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(payload["history"], [{"role": "assistant", "content": "older"}])
                 self.assertEqual(payload["latestTurn"], {"user": chat.message, "assistant": reply})
                 self.assertEqual(objects["memory"], {"Context": f"context {index}", "unrelated": True})
+
+    async def test_flow_memory_controls_disable_recall_and_capture(self):
+        graph = self.graph(operation="generate", agentId=self.agent_id, property="summary")
+        graph.nodes[0].data.recallMemories = False
+        state = next(node for node in graph.nodes if node.type == "state")
+        state.data.stateDefinition.includeChatTurn = True
+        state.data.stateDefinition.captureMemories = False
+        graph.edges = [edge.model_copy(update={"source": "api-response"}) if edge.target == "state" else edge
+                       for edge in graph.edges if edge.source != "state"]
+        from flow_graph import FlowEdge
+        graph.edges.append(FlowEdge(id="reply", source="response", target="api-response"))
+        memory = Mock(recalled=[], pending=[], recall=AsyncMock(), capture=AsyncMock())
+        with patch("flow_execution.run_agent", new=AsyncMock(return_value="summary")):
+            await execute(graph, self.agents, None, None, "hello", Mock(), ChatRequest(message="hello"), {}, memory)
+        memory.recall.assert_not_awaited()
+        memory.capture.assert_not_awaited()

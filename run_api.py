@@ -1,4 +1,5 @@
 """Admin controls for observed runs and the chat flow binding."""
+import os
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
@@ -10,6 +11,8 @@ from flow_execution import plan_flow, run_in_background
 from flow_graph import FlowRun, snapshot
 from json_mapping import MappingError
 from run_store import Run, activate, activation, deactivate, inspect_run, recent
+from memory import memory_enabled
+from memory_store import list_memories, memory_detail
 
 
 def no_store(response: Response):
@@ -17,6 +20,22 @@ def no_store(response: Response):
 
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin_access), Depends(no_store)])
+
+
+@router.get("/memory-status")
+def memory_status():
+    return {"enabled": memory_enabled(), "embeddingConfigured": bool(os.getenv("OPENAI_API_KEY"))}
+
+
+@router.get("/memories")
+def browse_memories(request: Request, query: str = Query("", max_length=2000), offset: int = Query(0, ge=0),
+                    limit: int = Query(50, ge=1, le=100)):
+    return list_memories(library_for(request), query=query, offset=offset, limit=limit)
+
+
+@router.get("/memories/{memory_id}")
+def inspect_memory(memory_id: UUID, request: Request, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
+    return memory_detail(library_for(request), memory_id, offset=offset, limit=limit)
 
 
 class Revision(BaseModel):

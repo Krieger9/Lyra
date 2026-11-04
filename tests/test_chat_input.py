@@ -59,7 +59,7 @@ class ActivatedChatTests(unittest.IsolatedAsyncioTestCase):
         body = {"message": "continue", "history": turns}
         with patch.dict(app.dependency_overrides, {require_chat_access: lambda: ["User.Chat"]}), \
                 patch.object(app.state, "library", library, create=True), patch.object(app.state, "studio", studio, create=True), \
-                patch("app.Run"), patch("app.activation") as activation:
+                patch("app.Run"), patch("app.memory_enabled", return_value=False), patch("app.activation") as activation:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
                 activation.return_value = FlowSnapshot.model_validate(saved)
                 agent = next(n for n in saved["graph"]["nodes"] if n["type"] == "agent")

@@ -76,8 +76,20 @@ def _conversation_state(connection):
     checkpoints.create(connection, checkfirst=True)
 
 
+def _memories(connection):
+    connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
+    path = Path(__file__).with_name("migrations") / "005_memories.sql"
+    connection.exec_driver_sql(path.read_text(encoding="utf-8"))
+
+
+def _memory_turns(connection):
+    path = Path(__file__).with_name("migrations") / "006_memory_turns.sql"
+    connection.exec_driver_sql(path.read_text(encoding="utf-8"))
+
+
 # Append revisions here. The recorded sequence is part of the database format.
-MIGRATIONS = ((1, _baseline), (2, _agent_inputs_and_outputs), (3, _provider_catalog), (4, _conversation_state))
+MIGRATIONS = ((1, _baseline), (2, _agent_inputs_and_outputs), (3, _provider_catalog),
+              (4, _conversation_state), (5, _memories), (6, _memory_turns))
 
 
 def apply_migrations(connection):
