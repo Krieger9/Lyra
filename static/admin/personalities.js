@@ -29,6 +29,10 @@ export async function mountPersonalities() {
     <p>Placeholders: <code>{{name}}</code>, <code>{{goals}}</code>, <code>{{memories}}</code>.
     Goals and memories are appended when their placeholders are omitted. Other template expressions are not supported.</p>
     <label for="personality-goals">Goals — one per line (up to 20)</label><textarea id="personality-goals" rows="4"></textarea>
+    <label for="personality-constitution">Constitution — durable commitments</label><textarea id="personality-constitution" rows="6" maxlength="6000"></textarea>
+    <label for="personality-persona">Persona — temperament, interests and voice</label><textarea id="personality-persona" rows="5" maxlength="4000"></textarea>
+    <label><input type="checkbox" id="personality-continuity">Enable private continuity, library tools and automatic reflection</label>
+    <p>Each user's first conversation copies this foundation. Later development belongs to that user and follows this personality across flows and models. Foundation edits do not overwrite existing private continuity. Tools require an OpenAI or Claude provider.</p>
     <h3>Personality memories</h3><p>All assigned memories accompany this personality. These are shared background facts for anyone using the flow.
     General chat memories stay private to their owner. Copying one here makes the selected fact part of the shared personality.</p>
     <div id="personality-memories"></div><button type="button" id="add-personality-memory">Write a memory</button>
@@ -67,7 +71,12 @@ export async function mountPersonalities() {
   form.addEventListener("input", () => { dirty = true; preview.hidden = true; });
   window.addEventListener("beforeunload", event => { if (dirty) { event.preventDefault(); event.returnValue = ""; } });
   form.querySelector("#add-personality-memory").onclick = () => { addMemory(); dirty = true; preview.hidden = true; };
-  const body = () => ({name: name.value, template: template.value,
+  const constitution = form.querySelector("#personality-constitution"), persona = form.querySelector("#personality-persona");
+  const continuity = form.querySelector("#personality-continuity");
+  constitution.value = saved?.constitution ?? ""; persona.value = saved?.persona ?? "";
+  continuity.checked = saved?.continuityEnabled ?? false;
+  const body = () => ({name: name.value, template: template.value, constitution: constitution.value,
+    persona: persona.value, continuityEnabled: continuity.checked,
     goals: goals.value.split("\n").map(s => s.trim()).filter(Boolean), memories});
   let busy = false;
   async function action(work) {
@@ -112,6 +121,7 @@ export async function mountPersonalities() {
     status.textContent = page.memories.length ? "Choose facts to share with this personality." : "No matching memories.";
   }); };
   if (id) {
+    host.append(link("Open my private continuity and library", "/admin/continuity/?id=" + encodeURIComponent(id)));
     const runs = await api("/" + encodeURIComponent(id) + "/runs");
     host.append(el("h3", "Recent turns using this personality"));
     const list = el("ul"); list.className = "configuration-list";

@@ -10,12 +10,13 @@ from model_adapter import provider_model
 
 
 class AgentPrompts:
-    def __init__(self, library, definition, schema, observe=None, history=None, memories=None, personality=None):
+    def __init__(self, library, definition, schema, observe=None, history=None, memories=None, personality=None, identity=None):
         self.library, self.definition, self.schema = library, definition, schema
         self.observe = observe
         self.history = history
         self.memories = memories
         self.personality = personality
+        self.identity = identity
 
     def render_part(self, kind, reference, parameters):
         if self.observe:
@@ -29,7 +30,13 @@ class AgentPrompts:
     def render(self, name, parameters, **options):
         instruction = self.definition["instructions"]
         system = self.render_part("instructions", instruction, parameters)
-        if self.personality:
+        if self.identity:
+            from identity import RUNTIME_INSTRUCTIONS
+            bundle = self.identity.context(parameters.get("request", ""))
+            system += "\n\n" + RUNTIME_INSTRUCTIONS + "\nPrivate continuity context:\n" + json_text(bundle)
+            if self.observe:
+                self.observe("identity.context", bundle=bundle)
+        elif self.personality:
             from personalities import render_personality
             rendered = render_personality(self.personality)
             system += ("\n\nApply this personality's voice and goals while respecting the agent's task and output contract. "
@@ -48,8 +55,8 @@ class AgentPrompts:
                 self.observe("schema.inserted", strategy="prompt", schema=self.schema.json_schema())
         prompt = self.definition["prompt"]
         content = parameters["request"] if prompt is None else self.render_part("prompt", prompt, parameters)
-        if self.history is not None:
-            return [{"role": "system", "content": system}, *self.history, {"role": "user", "content": content}]
+        if self.history is not None or self.identity:
+            return [{"role": "system", "content": system}, *(self.history or []), {"role": "user", "content": content}]
         return system + "\n\n" + content
 
 
@@ -79,7 +86,7 @@ class LinkedTrace:
 
 
 async def run_agent(library, studio, definition, value, observe=None, *, selection=None, chat_context=None,
-                    memories=None, personality=None):
+                    memories=None, personality=None, identity=None):
     schema = OutputSchema.model_validate(definition["outputSchema"]) if definition["outputSchema"] else None
     history = None
     parameters = None
@@ -93,7 +100,11 @@ async def run_agent(library, studio, definition, value, observe=None, *, selecti
         model = provider_model(definition["endpoint"], model_selection["model"])
     else:
         model = studio.model
-    runner = AgentStudio(AgentPrompts(library, definition, schema, observe, history, memories, personality),
+    if identity:
+        from tool_runtime import ToolModel
+        identity.reflection_model = model
+        model = ToolModel(model, identity, observe)
+    runner = AgentStudio(AgentPrompts(library, definition, schema, observe, history, memories, personality, identity),
                          ObservedModel(model, observe) if observe else model,
                          LinkedTrace(studio.traces, observe) if observe else studio.traces)
     result = await runner.run(value if isinstance(value, str) else json_text(value), prompt=definition["name"],

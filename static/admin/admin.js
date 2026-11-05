@@ -95,6 +95,10 @@ async function loadHome() {
     const { mountPersonalities } = await import(assetUrl("/admin/personalities.js"));
     await mountPersonalities();
   }
+  if (page === "continuity") {
+    const { mountContinuity } = await import(assetUrl("/admin/continuity.js"));
+    await mountContinuity();
+  }
   if (page === "memories") {
     const { mountMemories } = await import(assetUrl("/admin/memories.js"));
     await mountMemories();
@@ -133,6 +137,7 @@ async function loadHome() {
     prompts: "Manage the versioned Lyra prompt library.",
     memories: "Browse saved memories and the turns that created, reinforced or recalled them.",
     personalities: "Write a personality’s prompt, goals and curated memories, then load it into a flow.",
+    continuity: "Explore private identity, interests and memories. Each user has their own continuity across flows and models.",
   };
   statusLine.textContent = flowLookupError || descriptions[page];
 }

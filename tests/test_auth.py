@@ -84,6 +84,12 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_definition_endpoints_require_admin_scope_and_role(self):
         requests = [
             ("GET", "/api/admin/memories"),
+            ("GET", "/api/admin/continuity/" + str(uuid4())),
+            ("POST", "/api/admin/continuity/" + str(uuid4()) + "/change"),
+            ("POST", "/api/admin/continuity/" + str(uuid4()) + "/restore"),
+            ("GET", "/api/admin/continuity/" + str(uuid4()) + "/export"),
+            ("POST", "/api/admin/continuity/" + str(uuid4()) + "/import"),
+            ("POST", "/api/admin/continuity/" + str(uuid4()) + "/reflect"),
             ("GET", "/api/admin/memories/" + str(uuid4())),
             ("POST", "/mcp"),
             ("POST", "/mcp/design"),

@@ -27,6 +27,9 @@ class PersonalityWrite(BaseModel, extra="forbid"):
     template: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=12000)]
     goals: list[ShortText] = Field(default_factory=list, max_length=20)
     memories: list[PersonalityMemory] = Field(default_factory=list, max_length=24)
+    constitution: str = Field(default="", max_length=6000)
+    persona: str = Field(default="", max_length=4000)
+    continuityEnabled: bool = False
 
     @field_validator("template")
     @classmethod
@@ -64,6 +67,10 @@ def render_personality(personality):
     }
     used = {match.group(1) for match in TOKENS.finditer(personality.template)}
     rendered = TOKENS.sub(lambda match: values[match.group(1)], personality.template)
+    if personality.constitution:
+        rendered += "\n\nDurable commitments:\n" + personality.constitution
+    if personality.persona:
+        rendered += "\n\nPersona:\n" + personality.persona
     for key in ("goals", "memories"):
         if key not in used:
             rendered += "\n\n" + values[key]
@@ -72,7 +79,8 @@ def render_personality(personality):
 
 def _read(connection, library, personality_id):
     schema = schema_name(connection)
-    row = connection.execute(text(f"SELECT id, name, revision, template, goals FROM {schema}.personalities "
+    row = connection.execute(text(f'SELECT id, name, revision, template, goals, constitution, persona, '
+                                  f'continuity_enabled AS "continuityEnabled" FROM {schema}.personalities '
                                   "WHERE id = :id AND library = :library"),
                              {"id": personality_id, "library": library}).mappings().first()
     if row is None:
@@ -138,7 +146,14 @@ async def save_personality(library, body, personality_id=None):
                     "ON CONFLICT (memory_id,model,dimensions) DO UPDATE SET embedding=EXCLUDED.embedding"),
                     {"id": memory_id, "model": EMBEDDING_MODEL, "dimensions": EMBEDDING_DIMENSIONS,
                      "embedding": json_text(next(embeddings))})
-        return _read(connection, library.name, personality_id)
+        connection.execute(text(f"UPDATE {schema}.personalities SET constitution=:constitution, persona=:persona, "
+            "continuity_enabled=:enabled WHERE id=:id"), {"id": personality_id, "constitution": body.constitution,
+            "persona": body.persona, "enabled": body.continuityEnabled})
+        saved = _read(connection, library.name, personality_id)
+        connection.execute(text(f"INSERT INTO {schema}.personality_versions (personality_id,revision,document) "
+            "VALUES (:id,:revision,CAST(:document AS jsonb))"), {"id": personality_id, "revision": saved.revision,
+            "document": json_text(saved.model_dump(mode="json"))})
+        return saved
 
 
 router = APIRouter(prefix="/api/admin/personalities", dependencies=[Depends(require_admin_access), Depends(no_store)])

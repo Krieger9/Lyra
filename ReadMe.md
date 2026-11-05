@@ -304,3 +304,38 @@ as general memory, stored in `personality_memory_embeddings`; unchanged memories
 The separate records include a PostgreSQL full-text index. Saving memory content requires the configured
 OpenAI embedding key; prompt/goals-only edits do not call the embedding provider. Saves are atomic and
 revision checked. Admin APIs are under `/api/admin/personalities`, including `/preview` and `/{id}/runs`.
+
+## Private continuity and library
+
+Enable **private continuity, library tools and automatic reflection** in a personality, then reactivate the flow. The first
+chat copies its pinned foundation into a private continuation keyed by signed-in user and personality.
+Every flow using that personality shares that user's continuation, even after a model change. Later
+foundation edits seed new continuations; they do not overwrite existing ones. Constitution, persona,
+goals and formative memories are stored independently of the model. In continuity mode these structured
+fields replace the static personality template; an empty constitution initially falls back to the template.
+
+**Configuration → Continuity** lets you inspect your continuation, browse from broad sections to detailed
+items, search within a branch, follow typed connections, edit, archive, restore a version, and export/import
+the current state as `lyra-continuity-v1` JSON. Restore and import create new versions and retain history.
+The UI shows the latest 50 versions and source events. Export includes source references; full source
+evidence stays in the original installation. Imported records are labeled accordingly.
+
+Conversation agents can read and organize their own library, revise their profile with reasons and evidence
+IDs, and adjust temporary focus and mood. A bounded post-turn reflection records significant choices and
+insights. **Reflect now** runs one explicit cycle using the active flow's conversation model. User-memory
+extraction remains separate. Debug/design runs use the shared foundation and do not modify private continuity.
+
+OpenAI continuity agents use native Responses API function calls (including Sol); Claude agents use native
+Messages API tools. Other adapters can still use static personalities. Runtime limits live outside editable
+identity: 16 tool calls per turn, six conversation rounds, three reflection rounds, 25 seconds for reflection,
+500 library items, 2,000 links and 512 KB per identity document. Writes are staged and commit atomically with
+the successful chat turn. Failed or replayed turns cannot duplicate identity changes; concurrent changes
+return a conflict. Reflection failures discard their own staged edits while preserving a successful answer.
+Working mood changes are bounded and decay toward baseline with a six-hour half-life; focus expires after a day.
+
+Continuations are isolated between users at runtime and in the Continuity API. As with existing chat traces,
+administrators and database operators can inspect run prompts and tool activity. They are not encrypted from
+the installation operator. Authored foundations remain shared. The model cannot change ownership, tools,
+credentials or host code through its personality. No background schedule, external research, shell access or
+autonomous code editing is enabled by this feature. Library retrieval currently uses lexical relevance and
+one-hop links; semantic reranking and larger-scale graph navigation remain future work.

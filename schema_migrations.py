@@ -92,9 +92,15 @@ def _personalities(connection):
     connection.exec_driver_sql(path.read_text(encoding="utf-8"))
 
 
+def _identity_continuity(connection):
+    path = Path(__file__).with_name("migrations") / "008_identity_continuity.sql"
+    connection.exec_driver_sql(path.read_text(encoding="utf-8"))
+
+
 # Append revisions here. The recorded sequence is part of the database format.
 MIGRATIONS = ((1, _baseline), (2, _agent_inputs_and_outputs), (3, _provider_catalog),
-              (4, _conversation_state), (5, _memories), (6, _memory_turns), (7, _personalities))
+              (4, _conversation_state), (5, _memories), (6, _memory_turns), (7, _personalities),
+              (8, _identity_continuity))
 
 
 def apply_migrations(connection):

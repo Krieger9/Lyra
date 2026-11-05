@@ -5,6 +5,7 @@ const sections = {
   "/admin/flow/": "Flow View",
   "/admin/memories/": "Memories",
   "/admin/personalities/": "Personalities",
+  "/admin/continuity/": "Continuity",
   "/admin/providers/": "Providers",
   "/admin/models/": "Models",
   "/admin/model-groups/": "Model groups",

@@ -52,7 +52,7 @@ class SchemaMigrationTests(unittest.TestCase):
         with self.engine.begin() as conn:
             ledger = f"{self.schema}.lyra_schema_migrations"
             applied = conn.execute(text(f"SELECT revision FROM {ledger} ORDER BY revision")).scalars().all()
-            self.assertEqual(applied, [1, 2, 3, 4, 5, 6, 7])
+            self.assertEqual(applied, [1, 2, 3, 4, 5, 6, 7, 8])
             keys = inspect(conn).get_foreign_keys("agent_definitions", schema=self.schema)
             self.assertEqual([key["referred_schema"] for key in keys if key["referred_table"] == "prompt_versions"],
                              [self.prompt_schema, self.prompt_schema])

@@ -57,13 +57,16 @@ class Run:
         with self.engine.begin() as conn:
             self._append(conn, kind, data)
 
-    def finish(self, status, result=None, error=None, turn=None, memory=None):
+    def finish(self, status, result=None, error=None, turn=None, memory=None, identity=None):
         with self.engine.begin() as conn:
             if turn is not None:
                 turn.commit(conn, self.id)
             if memory is not None:
                 links = memory.commit(conn, self.id)
                 self._append(conn, "memory.committed", {"count": len(memory.pending), "memories": links})
+            if identity is not None:
+                committed = identity.commit(conn, self.id, str(identity.source.get("message", "")))
+                self._append(conn, "identity.committed", committed)
             if error and self.node:
                 self._append(conn, "node.failed", {"error": error})
             self.node = None

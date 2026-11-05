@@ -50,6 +50,16 @@ class _HttpModelAdapter:
         return text
 
     async def complete_observed(self, prompt, observe):
+        result = await self.request(self.path, self.body(prompt), observe)
+        try:
+            output, tokens = self.unpack(result)
+            if not isinstance(output, str):
+                raise ValueError
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+            raise HTTPException(502, f"{self.key} endpoint returned an invalid text completion.") from None
+        return output, {"total_token_count": tokens} if tokens is not None else None
+
+    async def request(self, path, payload, observe=None):
         # Keys are bound by the operator to an exact API base, never to an arbitrary UI destination.
         bindings = {"https://api.openai.com/v1": "OPENAI_API_KEY", "https://api.anthropic.com/v1": "ANTHROPIC_API_KEY"}
         bindings.update(json.loads(os.getenv("LYRA_PROVIDER_KEY_ENV", "{}")))
@@ -57,25 +67,23 @@ class _HttpModelAdapter:
         credential = os.getenv(variable) if variable else None
         if variable and not credential:
             raise HTTPException(503, f"The configured credential for {self.uri} is unavailable.")
-        payload = self.body(prompt)
         if observe:
             observe("provider.request", provider=self.key, body=payload)
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(self.uri + "/" + self.path, headers=self.headers(credential), json=payload)
+            response = await client.post(self.uri + "/" + path, headers=self.headers(credential), json=payload)
         if not response.is_success:
             if observe:
                 observe("provider.response", provider=self.key, status=response.status_code)
             raise HTTPException(502, f"{self.key} endpoint returned HTTP {response.status_code}.")
         try:
             result = response.json()
-            text, tokens = self.unpack(result)
-            if not isinstance(text, str):
+            if not isinstance(result, dict):
                 raise ValueError
         except (ValueError, TypeError, KeyError, IndexError, AttributeError):
             raise HTTPException(502, f"{self.key} endpoint returned an invalid text completion.") from None
         if observe:
             observe("provider.response", provider=self.key, status=response.status_code, body=result)
-        return text, {"total_token_count": tokens} if tokens is not None else None
+        return result
 
 
 class ChatCompletionsAdapter(_HttpModelAdapter):
