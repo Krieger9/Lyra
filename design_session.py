@@ -34,12 +34,17 @@ def design_specs():
 
 
 class DesignSession:
-    def __init__(self, request, observe=None):
+    def __init__(self, request, observe=None, *, allowed=None, dispatch=None):
         self.request = request
         self.observe = observe
         self.calls = 0
         self.receipts = []
         self.last_result = ""
+        self.allowed = allowed
+        self.dispatch = dispatch
+
+    def permitted(self, operation):
+        return self.allowed is None or operation in self.allowed
 
     def page(self, offset):
         if offset >= len(self.last_result):
@@ -57,8 +62,10 @@ class DesignSession:
             if isinstance(args, ReadPage):
                 return self.page(args.offset)
             if isinstance(args, ListOperations):
-                result = list(operations(self.request.app))
+                result = [op for op in operations(self.request.app) if self.permitted(op)]
             elif isinstance(args, DescribeOperation):
+                if not self.permitted(args.operation):
+                    raise ValueError("Operation unavailable for this method.")
                 result = describe(self.request.app, args.operation)
             else:
                 call = args
@@ -66,7 +73,10 @@ class DesignSession:
                     call = args.as_call()
                 elif isinstance(args, PromptWrite):
                     call = DesignCall(operation="POST /api/admin/prompts", body=args.model_dump())
-                result = await call_design(self.request, call, from_agent=True)
+                if not self.permitted(call.operation):
+                    raise ValueError("Operation unavailable for this method.")
+                result = (await self.dispatch(call) if self.dispatch else
+                          await call_design(self.request, call, from_agent=True))
                 receipt = {"operation": call.operation, "path": call.path, "status": result["status"]}
                 self.receipts.append(receipt)
                 if self.observe:

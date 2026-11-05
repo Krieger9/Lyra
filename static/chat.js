@@ -17,11 +17,16 @@ let needsSignIn = true;
 const accountButton = document.querySelector("#account");
 const signInDraftKey = "lyra.signInDraft";
 const configureLink = document.querySelector("#configure");
+const designControl = document.querySelector("#design-control");
+const designMode = document.querySelector("#design-mode");
+let designerScope;
 const markdown = window.markdownit?.({ html: false, breaks: true }).disable("image");
 
 function lockChat() {
   document.body.classList.add("chat-locked");
   configureLink.hidden = true;
+  designControl.hidden = true;
+  designMode.value = "";
 }
 
 async function initializeAuth() {
@@ -49,12 +54,15 @@ async function initializeAuth() {
   if (account) {
     try {
       const token = await client.acquireTokenSilent({ scopes, account });
-      const response = await fetch("/api/chat/session", {
+      const response = await fetch("/api/chat/session?include_tools=true", {
         headers: { Authorization: "Bearer " + token.accessToken }, cache: "no-store",
       });
       if (response.ok) {
         const session = await response.json();
         configureLink.hidden = session.can_configure !== true;
+        designerScope = session.designer_scope;
+        designControl.hidden = !designerScope;
+        designMode.value = designerScope ? "query" : "";
         document.body.classList.remove("chat-locked");
         statusLine.textContent = savedDraft ? "Signed in. Your draft is ready to send." : "";
         updateControls();
@@ -106,6 +114,7 @@ initializeAuth().catch((error) => {
 });
 
 function updateControls() {
+  designMode.disabled = busy;
   send.disabled = busy || needsSignIn || accountButton.disabled || !draft.value.trim();
   reset.disabled = busy || (!history.length && !draft.value);
   draft.readOnly = busy;
@@ -179,11 +188,21 @@ form.addEventListener("submit", async (event) => {
   let inspectLink;
   statusLine.textContent = "Lyra is thinking…";
   try {
-    const token = await client.acquireTokenSilent({ scopes, account });
+    const mode = designMode.value;
+    const tokenRequest = { scopes: mode ? [...scopes, designerScope] : scopes, account };
+    let token;
+    try {
+      token = await client.acquireTokenSilent(tokenRequest);
+    } catch (error) {
+      if (!mode || !(error instanceof msal.InteractionRequiredAuthError)) throw error;
+      token = await client.acquireTokenPopup(tokenRequest);
+    }
+    if (mode === "activate") designMode.value = "draft";
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + token.accessToken,
-        "X-Lyra-Conversation-Id": conversationId, "X-Lyra-Turn-Id": pendingTurn.id },
+        "X-Lyra-Conversation-Id": conversationId, "X-Lyra-Turn-Id": pendingTurn.id,
+        ...(mode ? {"X-Lyra-Designer": mode} : {}) },
       body: JSON.stringify({ message, history }),
     });
     const data = await response.json();
@@ -206,7 +225,12 @@ form.addEventListener("submit", async (event) => {
     if (reply.trim()) history.push({ role: "assistant", content: reply.slice(0, 8000) });
     history = history.slice(-12);
     pendingTurn = undefined;
-    statusLine.textContent = "";
+    const activatedRevision = response.headers.get("X-Lyra-Activated-Revision");
+    statusLine.textContent = activatedRevision ? `Switched chat to the verified flow, revision ${activatedRevision}.` : "";
+    if (response.headers.get("X-Lyra-Designer-Available") === "false") {
+      designMode.value = "";
+      designControl.hidden = true;
+    }
   } catch (error) {
     pending.remove();
     welcome.hidden = history.length > 0;

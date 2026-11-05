@@ -34,6 +34,14 @@
     <section id="messages" role="log" aria-label="Conversation"></section>
     <div class="dock">
       <div id="status" role="status">Checking sign-in…</div>
+      <label id="design-control" hidden>Flow Designer
+        <select id="design-mode">
+          <option value="">Off</option>
+          <option value="query">Query and explain</option>
+          <option value="draft">Work on drafts</option>
+          <option value="activate">Allow activation this turn</option>
+        </select>
+      </label>
       <form id="composer">
         <label for="draft" class="sr-only">Message Lyra</label>
         <textarea id="draft" placeholder="Message Lyra…" rows="2" maxlength="8000"></textarea>

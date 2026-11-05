@@ -144,7 +144,8 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
       otherwise].find(p => p.id === edge.sourceHandle);
     // Run cards use one read-only handle. Keep the design's named port visible on the wire.
     return { ...edge, sourceHandle: null, targetHandle: null, label: edge.targetHandle === "memories" ? "Memories" :
-      edge.targetHandle === "personality" ? "Personality" : path ? path.label + " · " + edge.name : edge.name, animated: !edge.targetHandle && states.get(edge.target) === "started",
+      edge.targetHandle === "personality" ? "Personality" : edge.targetHandle === "designer" ? "Flow Designer" :
+      path ? path.label + " · " + edge.name : edge.name, animated: !edge.targetHandle && states.get(edge.target) === "started",
       className: focusId ? (highlighted ? "trace-wire-active" : "trace-wire-muted") : undefined };
   });
   function selectNode(id: string) {
@@ -158,7 +159,8 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     return {id:node.id, position:node.position, measured:measurements.current.get(node.id),
       sourcePosition:Position.Right, targetPosition:Position.Left,
       data:{label:<><strong>{node.data.label || node.type}</strong><small>{node.type === "personality"
-        ? profiles.find(p => p.id === node.data.personalityId)?.name ?? "Profile reference" : state}</small>
+        ? profiles.find(p => p.id === node.data.personalityId)?.name ?? "Profile reference" :
+          node.type === "designer" ? "Agent tool" : state}</small>
         {selectedPaths.has(node.id) && <small>Path · {String(selectedPaths.get(node.id))}</small>}</>},
       className:[node.type === "personality" ? "trace-node personality-card" : `trace-node trace-${state}`, node.id === focusId ? "trace-focus" :
         neighbors.has(node.id) ? "trace-neighbor" : focusId ? "trace-muted" : ""].join(" "),

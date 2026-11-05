@@ -37,6 +37,7 @@ def utcnow():
 class Run:
     def __init__(self, library, document: FlowSnapshot, source):
         self.engine = library.storage.engine
+        self.library = library.name
         self.id = uuid4()
         self.started = perf_counter()
         self.seq = 0
@@ -67,7 +68,7 @@ class Run:
             conn.execute(runs.update().where(runs.c.id == self.id).values(result=result))
             self._append(conn, "response.ready", {})
 
-    def finish(self, status, result=None, error=None, turn=None, memory=None, identities=()):
+    def finish(self, status, result=None, error=None, turn=None, memory=None, identities=(), designer=None):
         with self.engine.begin() as conn:
             if turn is not None:
                 turn.commit(conn, self.id)
@@ -77,6 +78,9 @@ class Run:
             for identity in identities:
                 committed = identity.commit(conn, self.id, str(identity.source.get("message", "")))
                 self._append(conn, "identity.committed", committed)
+            if designer and designer.pending:
+                designer.commit(conn, self.library)
+                self._append(conn, "designer.activated", {"id": str(designer.pending.id), "revision": designer.pending.revision})
             if error and self.node:
                 self._append(conn, "node.failed", {"error": error})
             self.node = None

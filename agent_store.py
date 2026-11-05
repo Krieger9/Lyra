@@ -5,7 +5,7 @@ from typing import Annotated
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 from prompt_studio import NotFoundError
 from prompt_studio.sqlalchemy_storage import versions
 from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, ForeignKeyConstraint, Integer, MetaData, String, Table, UniqueConstraint, Uuid, select, text
@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 
 from output_contract import OutputSchema
 from model_adapter import ADAPTERS
+from tool_sets import TOOL_SETS
 
 metadata = MetaData()
 DEFAULT_INSTRUCTIONS = "Instructions.default"
@@ -70,6 +71,7 @@ definitions = Table(
     Column("prompt_name", String(255), nullable=True),
     Column("prompt_version", Integer, nullable=True),
     Column("output_schema", JSONB(none_as_null=True)),
+    Column("tool_sets", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("provider_id", Uuid, ForeignKey(providers.c.id)), Column("model_name", String(255)),
     CheckConstraint("(provider_id IS NULL) = (model_name IS NULL)", name="agent_model_selection_complete"),
     Column("revision", Integer, nullable=False),
@@ -108,6 +110,14 @@ class AgentDefinition(BaseModel):
     prompt: PromptReference | None = None
     outputSchema: OutputSchema | None = None
     modelSelection: ModelSelection | None = None
+    toolSets: list[str] = Field(default_factory=list, max_length=64, description="Assigned tool-set IDs from the catalog.")
+
+    @field_validator("toolSets")
+    @classmethod
+    def valid_tool_sets(cls, value):
+        if len(set(value)) != len(value) or any(key not in TOOL_SETS for key in value):
+            raise ValueError("Select distinct tool sets from the catalog.")
+        return value
 
 
 class AgentUpdate(AgentDefinition):
@@ -154,6 +164,7 @@ def serialize_agent(row):
         "instructions": {"name": row["instructions_name"], "version": row["instructions_version"]},
         "prompt": None if row["prompt_name"] is None else {"name": row["prompt_name"], "version": row["prompt_version"]},
         "outputSchema": row["output_schema"],
+        "toolSets": row["tool_sets"],
         "modelSelection": {"providerId": str(row["provider_id"]), "model": row["model_name"]} if row["provider_id"] else None,
     }
 
@@ -176,6 +187,7 @@ def agent_values(body, library):
         "prompt_name": body.prompt.name if body.prompt else None,
         "prompt_version": body.prompt.version if body.prompt else None,
         "output_schema": body.outputSchema.model_dump(exclude_none=True) if body.outputSchema else None,
+        "tool_sets": body.toolSets,
         "provider_id": body.modelSelection.providerId if body.modelSelection else None,
         "model_name": body.modelSelection.model if body.modelSelection else None,
         "updated_at": datetime.now(timezone.utc),

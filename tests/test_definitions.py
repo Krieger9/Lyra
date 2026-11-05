@@ -866,6 +866,128 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(model["status"], 201)
                     self.assertIn(model["data"], (await self.client.get("/api/admin/catalog")).json()["models"])
 
+    async def test_agent_tool_sets_follow_the_definition_and_pin_with_each_activation(self):
+        from run_store import activation
+        seed_designer(self.library)
+        catalog = (await self.client.get("/api/admin/catalog")).json()
+        self.assertIn("flow_designer", catalog["toolSets"][0]["tools"])
+        url = "/api/admin/agents"
+        bad = await self.client.post(url, json={"name": "Unknown tools", "toolSets": ["missing"]})
+        self.assertEqual(bad.status_code, 422)
+        agent = (await self.client.post(url, json={"name": "Lyra", "toolSets": ["flow-design"]})).json()
+        url += "/" + agent["id"]
+        edited = (await self.client.put(url, json={"name": "Lyra", "revision": agent["revision"]})).json()
+        self.assertEqual(edited["toolSets"], ["flow-design"])
+        graph = self.flow_graph()
+        graph["nodes"].append({"id": "lyra", "type": "agent", "position": {"x": 1, "y": 1},
+                               "data": {"definition": {"id": agent["id"]}}})
+        graph["edges"] = [{"id": "in", "source": "api-input", "target": "lyra"},
+                          {"id": "out", "source": "lyra", "target": "api-response"}]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Chat", "graph": graph})).json()
+        binding = "/api/admin/chat-flow/" + flow["id"]
+        self.assertEqual((await self.client.put(binding, json={"revision": 1})).status_code, 200)
+        self.assertIsNotNone(activation(self.library).designer)
+        def admin_access(request: Request):
+            request.state.design_owner = "admin"
+        with patch.dict(app.dependency_overrides, {require_admin_access: admin_access}), \
+                patch("flow_execution.run_agent", new_callable=AsyncMock, return_value="Checked") as call:
+            result = await self.client.post("/api/admin/flows/" + flow["id"] + "/test-turn",
+                json={"revision": 1, "conversation_id": str(uuid4()), "turn_id": str(uuid4()), "chat": {"message": "Inspect"}})
+            self.assertEqual(result.status_code, 200, result.text)
+            designer = call.await_args.kwargs["designer"]
+            self.assertEqual(designer.specs()[0]["parameters"]["properties"]["method"]["enum"], ["Query", "Explain"])
+            self.assertIn("error", await designer.call("flow_designer", {"method": "Update", "request": "Edit this"}))
+        removed = await self.client.put(url, json={"name": "Lyra", "revision": edited["revision"], "toolSets": []})
+        self.assertEqual(removed.status_code, 200)
+        self.assertIsNotNone(activation(self.library).designer)
+        self.assertEqual((await self.client.put(binding, json={"revision": 1})).status_code, 200)
+        self.assertIsNone(activation(self.library).designer)
+
+    async def test_chat_designer_keeps_draft_offline_until_verified_and_requested(self):
+        from agent_studio.postgres_tracing import PostgresTraceAdapter, traces
+        from delegated_designer import ACTIVATE, TEST
+        from fastapi import HTTPException
+
+        seed_designer(self.library)
+        agent = (await self.client.post("/api/admin/agents", json={"name": "Lyra"})).json()
+        graph = self.flow_graph()
+        graph["nodes"].extend([
+            {"id": "lyra", "type": "agent", "position": {"x": 1, "y": 1}, "data": {"definition": {"id": agent["id"]}}},
+            {"id": "tool", "type": "designer", "position": {"x": 2, "y": 2}, "data": {"label": "Designer"}}])
+        graph["edges"] = [{"id": "in", "source": "api-input", "target": "lyra"},
+                          {"id": "out", "source": "lyra", "target": "api-response"},
+                          {"id": "tool-wire", "source": "tool", "target": "lyra", "targetHandle": "designer"}]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Initial", "graph": graph})).json()
+        path = {"flow_id": flow["id"]}
+        binding = "/api/admin/chat-flow/" + flow["id"]
+        self.assertEqual((await self.client.put(binding, json={"revision": 1})).status_code, 200)
+
+        def chat_access(request: Request):
+            request.state.chat_owner = "tester"
+
+        def admin_access(request: Request):
+            request.state.design_owner = "design/tester"
+
+        traces.create(self.storage.engine)
+        app.state.studio.traces = PostgresTraceAdapter(self.storage.engine)
+        method, commands = "Query", []
+        results = []
+
+        def tool_call(name, arguments):
+            return {"message": {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": name, "arguments": arguments}}]}}
+
+        async def model_request(endpoint, payload, observe):
+            names = {t["function"]["name"] for t in payload["tools"]}
+            last = payload["messages"][-1]
+            if "flow_designer" in names:
+                self.assertEqual(names, {"flow_designer"})
+                if last["role"] != "tool":
+                    return tool_call("flow_designer", {"method": method, "request": "Perform the requested task"})
+            else:
+                if last["role"] == "tool":
+                    results.append(json.loads(last["content"]))
+                if commands:
+                    return tool_call("call_design_operation", commands.pop(0))
+            return {"message": {"role": "assistant", "content": "Done"}}
+
+        app.state.studio.model = SimpleNamespace(key="ollama", path="api/chat", model=SimpleNamespace(id="test"),
+            request=model_request, complete=AsyncMock(return_value="Test reply"))
+        save = {"operation": "PUT /api/admin/flows/{flow_id}", "path": path,
+                "body": {"name": "New draft", "revision": 1, "graph": graph}}
+        activate = {"operation": ACTIVATE, "path": path, "body": {"revision": 2}}
+        async def chat(mode):
+            return await self.client.post("/api/chat", json={"message": "Design request"}, headers={
+                "Authorization": "Bearer test", "X-Lyra-Designer": mode,
+                "X-Lyra-Conversation-Id": str(uuid4()), "X-Lyra-Turn-Id": str(uuid4())})
+
+        with patch.dict(app.dependency_overrides, {require_chat_access: chat_access, require_admin_access: admin_access}), \
+                patch("app.settings") as settings:
+            settings.return_value.authorize.side_effect = HTTPException(403, "Requires admin access")
+            self.assertEqual((await chat("draft")).status_code, 403)
+            settings.return_value.authorize.side_effect = None
+            for method in ("Query", "Explain"):
+                commands.append(save)
+                self.assertEqual((await chat("activate")).status_code, 200)
+                self.assertIn("error", results[-1])
+            method = "Update"
+            commands.extend([save, activate])
+            self.assertEqual((await chat("draft")).status_code, 200)
+            self.assertEqual(results[-2]["data"]["revision"], 2)
+            self.assertIn("error", results[-1])
+            commands.append(activate)
+            self.assertEqual((await chat("activate")).status_code, 200)
+            self.assertEqual(results[-1]["status"], 409)
+            commands.append({"operation": TEST, "path": path, "body": {"revision": 2,
+                "conversation_id": str(uuid4()), "turn_id": str(uuid4()), "chat": {"message": "Verify the draft"}}})
+            self.assertEqual((await chat("draft")).status_code, 200)
+            self.assertEqual(results[-1]["status"], 200, results[-1])
+            self.assertEqual((await self.client.get("/api/admin/chat-flow")).json()["revision"], 1)
+            commands.append(activate)
+            self.assertEqual((await chat("activate")).status_code, 200)
+            self.assertEqual(results[-1]["status"], 202)
+            self.assertEqual((await self.client.get("/api/admin/chat-flow")).json()["revision"], 2)
+
     async def test_system_designer_runs_as_admin_and_preserves_edited_definition(self):
         from agent_studio.postgres_tracing import PostgresTraceAdapter, traces
         from agent_output import run_agent

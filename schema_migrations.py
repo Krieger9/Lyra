@@ -97,10 +97,15 @@ def _identity_continuity(connection):
     connection.exec_driver_sql(path.read_text(encoding="utf-8"))
 
 
+def _agent_tool_sets(connection):
+    connection.exec_driver_sql("ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS "
+                               "tool_sets JSONB NOT NULL DEFAULT '[]'::jsonb")
+
+
 # Append revisions here. The recorded sequence is part of the database format.
 MIGRATIONS = ((1, _baseline), (2, _agent_inputs_and_outputs), (3, _provider_catalog),
               (4, _conversation_state), (5, _memories), (6, _memory_turns), (7, _personalities),
-              (8, _identity_continuity))
+              (8, _identity_continuity), (9, _agent_tool_sets))
 
 
 def apply_migrations(connection):

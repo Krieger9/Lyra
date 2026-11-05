@@ -8,10 +8,11 @@ from json_mapping import json_text
 
 
 class ToolModel:
-    def __init__(self, model, session, observe=None, rounds=6, *, specs=None):
+    def __init__(self, model, session, observe=None, rounds=6, *, specs=None, responses=False):
         self.base, self.session, self.observe, self.rounds = model, session, observe, rounds
         self.model = model.model
         self.specs = specs
+        self.responses = responses
 
     async def complete(self, prompt):
         result, _ = await self.complete_observed(prompt, self.observe)
@@ -24,7 +25,7 @@ class ToolModel:
             raise HTTPException(422, "Identity tools require an OpenAI or Claude provider.")
         specs = self.specs if self.specs is not None else tool_specs()
         total = 0
-        chat_tools = self.specs is not None and key in ("openai", "ollama")
+        chat_tools = self.specs is not None and key in ("openai", "ollama") and not self.responses
         if chat_tools:
             tools = [{"type": "function", "function": spec} for spec in specs]
             conversation = list(messages)

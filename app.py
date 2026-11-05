@@ -23,7 +23,8 @@ from providers import router as providers_router
 from agent_store import seed_defaults, seed_designer
 from schema_migrations import apply_migrations, schema_transaction
 from flows import router as flows_router
-from flow_execution import respond
+from flow_execution import perform, respond
+from delegated_designer import DesignerTurn
 from run_store import Run, activation
 from run_api import router as run_router
 from run_mcp import install_mcp
@@ -157,9 +158,14 @@ def admin_page():
 
 
 @app.get("/api/chat/session")
-def chat_session(response: Response, roles: list[str] = Depends(require_chat_access)):
+def chat_session(request: Request, response: Response, include_tools: bool = False, roles: list[str] = Depends(require_chat_access)):
     response.headers["Cache-Control"] = "no-store"
-    return {"can_configure": any(role in roles for role in settings().admin_roles)}
+    result = {"can_configure": any(role in roles for role in settings().admin_roles)}
+    if include_tools and result["can_configure"]:
+        document = activation(request.app.state.library)
+        if document and document.designer:
+            result["designer_scope"] = f"{settings().resource}/{settings().admin_scope}"
+    return result
 
 
 @app.get("/vendor/msal.js", include_in_schema=False)
@@ -180,10 +186,18 @@ def msal_bridge():
 
 @app.post("/api/chat", response_model=ChatReply, dependencies=[Depends(require_chat_access)])
 async def chat(body: ChatRequest, request: Request, response: Response,
+               x_lyra_designer: Literal["query", "draft", "activate"] | None = Header(None),
                x_lyra_conversation_id: UUID | None = Header(None), x_lyra_turn_id: UUID | None = Header(None)):
     studio = request.app.state.studio
     library = request.app.state.library
     document = activation(library)
+    if x_lyra_designer:
+        token = request.headers["authorization"].split(None, 1)[1]
+        settings().authorize(token, admin=True)
+        if not document or not document.designer:
+            raise HTTPException(409, "Assign Flow Design to a participating agent and refresh the active flow.")
+        if not (x_lyra_conversation_id and x_lyra_turn_id):
+            raise HTTPException(422, "Designer turns require conversation and turn IDs.")
     if document:
         turn = None
         use_memory = memory_enabled() and document.graph.uses_memory
@@ -209,6 +223,19 @@ async def chat(body: ChatRequest, request: Request, response: Response,
             identities = TurnIdentities(library, request.state.chat_owner,
                 {"conversation_id": str(x_lyra_conversation_id), "turn_id": str(x_lyra_turn_id),
                  "message": body.message}, run.emit) if use_identity else None
+            if x_lyra_designer:
+                designer = DesignerTurn(request, document, x_lyra_designer == "activate", run.emit,
+                                        read_only=x_lyra_designer == "query")
+                if designer.read_only:
+                    return await respond(document, library, studio, value, run, body, turn, memory, identities,
+                                         designer=designer, render_response=lambda reply: JSONResponse({"reply": reply}, headers=headers))
+                reply = await perform(document, library, studio, value, run, body, turn, memory, identities,
+                                      designer=designer)
+                if designer.pending:
+                    headers["X-Lyra-Activated-Flow"] = str(designer.pending.id)
+                    headers["X-Lyra-Activated-Revision"] = str(designer.pending.revision)
+                    headers["X-Lyra-Designer-Available"] = "true" if designer.pending.designer else "false"
+                return JSONResponse({"reply": reply}, headers=headers)
             return await respond(document, library, studio, value, run, body, turn, memory, identities,
                 render_response=lambda reply: JSONResponse({"reply": reply}, headers=headers))
         except HTTPException as exc:

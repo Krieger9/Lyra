@@ -87,7 +87,7 @@ class LinkedTrace:
 
 
 async def run_agent(library, studio, definition, value, observe=None, *, selection=None, chat_context=None,
-                    memories=None, personality=None, identity=None, design_session=None):
+                    memories=None, personality=None, identity=None, design_session=None, designer=None):
     schema = OutputSchema.model_validate(definition["outputSchema"]) if definition["outputSchema"] else None
     history = None
     parameters = None
@@ -108,6 +108,17 @@ async def run_agent(library, studio, definition, value, observe=None, *, selecti
             raise HTTPException(403, "Run the System Flow Designer directly from an administrator session.")
         model = ToolModel(model, design_session, observe, rounds=17, specs=design_specs())
         history = history or []  # Keep the system instructions separate from user input and tool results.
+    elif designer:
+        from tool_sets import AgentTools
+        from identity import tool_specs
+        from tool_runtime import ToolModel
+        bindings = [(designer, designer.specs())]
+        if identity:
+            identity.reflection_model = model
+            bindings.append((identity, tool_specs()))
+        session = AgentTools(bindings)
+        model = ToolModel(model, session, observe, specs=session.specs, responses=model.key == "openai")
+        history = history or []
     elif identity:
         from tool_runtime import ToolModel
         identity.reflection_model = model

@@ -8,11 +8,12 @@ from pydantic import BaseModel, Field, JsonValue, field_validator, model_validat
 from sqlalchemy import Column, DateTime, Integer, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import JSONB
 
-from agent_store import AgentDefinition, Name, PromptReference, execution_agents, metadata
+from agent_store import AgentDefinition, Name, PromptReference, designer_id, execution_agents, metadata
 from chat_input import ChatRequest, InputSelection
 from flow_switch import SwitchDefinition
 from flow_state import StateDefinition
 from personalities import SavedPersonality, load_personality
+from tool_sets import FLOW_DESIGN
 from json_mapping import MappingError, ObjectDefinition, check_size
 
 flows = Table(
@@ -62,7 +63,7 @@ class NodeData(BaseModel):
 
 class FlowNode(BaseModel):
     id: str = Field(min_length=1, max_length=80)
-    type: Literal["apiInput", "apiResponse", "personality", "agent", "json", "item", "switch", "state", "recall", "remember"]
+    type: Literal["apiInput", "apiResponse", "personality", "designer", "agent", "json", "item", "switch", "state", "recall", "remember"]
     position: Position
     data: NodeData
 
@@ -84,7 +85,7 @@ class FlowEdge(BaseModel):
     source: str
     sourceHandle: str | None = Field(default=None, max_length=80)
     target: str
-    targetHandle: Literal["personality", "memories"] | None = None
+    targetHandle: Literal["personality", "memories", "designer"] | None = None
     name: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
     readAs: Literal["value", "json"] = "value"
 
@@ -165,6 +166,10 @@ class FlowGraph(BaseModel):
         return {edge.target: edge.source for edge in self.edges if edge.targetHandle == "memories"}
 
     @property
+    def designer_targets(self):
+        return {edge.target for edge in self.edges if edge.targetHandle == "designer"}
+
+    @property
     def agent_profile_ids(self):
         cards = {n.id: n.data.personalityId for n in self.nodes if n.type == "personality"}
         if self.personalityMode == "legacy":
@@ -207,6 +212,7 @@ class FlowGraph(BaseModel):
         single_inputs = set()
         personality_inputs = set()
         memory_inputs = set()
+        designer_inputs = set()
         for edge in self.edges:
             if edge.name and edge.targetHandle is None:
                 key = (edge.target, edge.name)
@@ -234,6 +240,11 @@ class FlowGraph(BaseModel):
                 if target.id in personality_inputs:
                     raise ValueError("An agent accepts one Personality connection.")
                 personality_inputs.add(target.id)
+            if edge.targetHandle == "designer":
+                allowed = source.type == "designer" and target.type == "agent"
+                if target.id in designer_inputs:
+                    raise ValueError("An agent accepts one Flow Designer connection.")
+                designer_inputs.add(target.id)
             if not allowed:
                 raise ValueError("This connection is not supported")
             if source.type == "switch":
@@ -334,6 +345,7 @@ class FlowSnapshot(BaseModel):
     revision: int
     graph: FlowGraph
     agents: dict[str, SavedAgent]
+    designer: SavedAgent | None = None
     personality: SavedPersonality | None = None
     personalities: dict[UUID, SavedPersonality] = Field(default_factory=dict)
 
@@ -357,9 +369,19 @@ def snapshot(library, flow_id, revision=None) -> FlowSnapshot:
         raise HTTPException(409, "This flow changed. Reopen the saved revision before running or activating it.")
     graph = FlowGraph.from_saved(row["graph"])
     profiles = {key: load_personality(library, key) for key in dict.fromkeys(graph.agent_profile_ids.values())}
+    agents = graph_agents(library, graph)
+    tools = {}
+    if graph.designer_targets or any(node.type == "agent" and node.data.definition and
+            FLOW_DESIGN in agents.get(str(node.data.definition.id), {}).get("toolSets", []) for node in graph.nodes):
+        key = designer_id(library.name)
+        with library.storage.engine.connect() as conn:
+            definition = execution_agents(conn, library, [key]).get(str(key))
+        if definition is None:
+            raise HTTPException(422, "System Flow Designer is unavailable.")
+        tools["designer"] = definition
     return FlowSnapshot(**serialize_flow(row, include_graph=False), graph=graph,
-                        agents=graph_agents(library, graph),
-                        personalities=profiles)
+                        agents=agents,
+                        personalities=profiles, **tools)
 
 
 def graph_agents(library, graph):

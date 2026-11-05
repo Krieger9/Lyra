@@ -59,6 +59,9 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .api-input-icon svg { width: 22px; height: 22px; }
 .api-input-card .item-kind { color: #316754; }
 .personality-card { border-color: #c999ad; background: #fff5f9; }
+.designer-card { border-color: #83a894; background: #f2f8f4; }
+.flow-canvas .flow-port.designer-port { background: #347451; }
+.designer-wire .react-flow__edge-path { stroke: #347451; stroke-dasharray: 5 3; }
 .personality-card .item-kind { color: #85425f; }
 .flow-canvas .flow-port.personality-port { background: #99486b; }
 .personality-port-label { display: block; margin-top: 5px; font-size: 10px; color: #85425f; }

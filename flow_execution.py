@@ -14,6 +14,7 @@ from flow_switch import FlowFields
 from json_mapping import MappingError, assemble, json_text, validate_mappings
 from run_store import RUN_TIMEOUT
 from model_adapter import provider_model
+from tool_sets import FLOW_DESIGN
 
 
 def plan_flow(graph, agents, observe=None):
@@ -124,7 +125,7 @@ async def extract_memories(memory, payload, agent, studio, run, node_id, chat=No
 
 
 async def execution_steps(graph, agents, library, studio, value, run, chat_context=None, conversation_state=None,
-                          memory=None, profiles=None, identities=None, design_session=None):
+                  memory=None, profiles=None, identities=None, design_session=None, designer=None):
     plan, incoming = plan_flow(graph, agents, run)
     profile_ids = graph.agent_profile_ids
     memory_sources = graph.memory_sources
@@ -230,7 +231,9 @@ async def execution_steps(graph, agents, library, studio, value, run, chat_conte
             output = await run_agent(library, studio, definition, inputs[parents[0].id], run.emit,
                                      selection=node.data.inputSelection, chat_context=chat_context,
                                      memories=recalled,
-                                     personality=profile, identity=identity, design_session=design_session)
+                                     personality=profile, identity=identity, design_session=design_session,
+                                     designer=designer if node.id in graph.designer_targets or
+                                     FLOW_DESIGN in definition.get("toolSets", []) else None)
             if identity:
                 identities.replies[profile.id] = output
         outputs[node.id] = output
@@ -248,15 +251,19 @@ async def execute(*args, **kwargs):
 
 
 async def run_steps(document: FlowSnapshot, library, studio, value, run, chat_context=None, turn=None, memory=None, identities=None,
-                    *, design_request=None, render_response=None):
+                    *, design_request=None, render_response=None, designer=None):
     run.emit("run.started", input=value)
     try:
         design = DesignSession(design_request, run.emit) if design_request is not None else None
+        if design and document.designer and not design_request.scope.get("lyra.system_agent_call"):
+            from delegated_designer import DesignerTurn
+            designer = DesignerTurn(design_request, document, False, run.emit, read_only=True)
         steps = execution_steps(document.graph, document.agent_definitions(), library, studio,
-            value, run, chat_context, turn.objects if turn else None, memory, document.profiles(), identities, design)
+            value, run, chat_context, turn.objects if turn else None, memory, document.profiles(), identities, design, designer)
         started = perf_counter()
-        result = await asyncio.wait_for(anext(steps), RUN_TIMEOUT)
-        remaining = RUN_TIMEOUT - (perf_counter() - started)
+        timeout = RUN_TIMEOUT * 5 if designer else RUN_TIMEOUT
+        result = await asyncio.wait_for(anext(steps), timeout)
+        remaining = timeout - (perf_counter() - started)
         if render_response:
             response = render_response(result)
             run.publish_reply(result, turn)
@@ -267,7 +274,7 @@ async def run_steps(document: FlowSnapshot, library, studio, value, run, chat_co
         if identities and chat_context:
             await identities.reflect(chat_context)
         sessions = [identities.sessions[key] for key in sorted(identities.sessions)] if identities else []
-        run.finish("completed", result=result, turn=turn, memory=memory, identities=sessions)
+        run.finish("completed", result=result, turn=turn, memory=memory, identities=sessions, designer=designer)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)
         raise

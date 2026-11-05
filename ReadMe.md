@@ -189,6 +189,22 @@ Run evidence includes original messages, prompt text and model output. It persis
 
 ## System Flow Designer
 
+To delegate from Lyra, open **Configuration → Agents → Lyra → Tool sets**, select **Flow Design**
+and save. Reactivate the flow to pin the updated definition. The assignment follows the agent
+across flows. Existing Flow Designer card connections also supply the tool. Administrator chat
+defaults to **Query and explain** when the active snapshot includes the designer.
+Select **Work on drafts** to enable edits. Lyra delegates a
+plain-language task using one tool. **Query** inspects design data, **Explain** investigates
+behavior or design options, and **Update** can edit flows, agents and prompts and test a draft.
+Other chats continue using their pinned active snapshot while the designer works.
+
+To switch chat, select **Allow activation this turn** and ask Lyra to activate the draft.
+The runtime checks for a successful debug run with the same graph, agent definitions and
+personalities. The binding changes atomically when the design turn completes. A newer draft
+revision or a competing activation requires another review. Draft edits are saved as each
+operation succeeds and remain available if later steps fail. The run inspector records the
+delegated request, API operations and activation.
+
 Open **Configuration → Agents → System Flow Designer → Open chat** and describe the change you want.
 For example, ask “Inspect the most recent failed run, read the prompt version that produced the failure,
 and draft a fix.” The chat shows the API calls and HTTP statuses for each completed turn.

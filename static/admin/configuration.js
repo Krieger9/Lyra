@@ -30,6 +30,7 @@ export async function mountConfiguration(page) {
         <label for="agent-model">Model</label>
         <select id="agent-model"></select>
         <div id="agent-model-links"></div>
+        <fieldset id="agent-tool-sets"><legend>Tool sets</legend></fieldset>
         <label for="instructions">System instructions</label>
         <select id="instructions" required></select>
         <a id="create-instructions" href="/admin/prompts/?new=1">Create instructions in PromptStudio</a>
@@ -205,6 +206,8 @@ export async function mountConfiguration(page) {
   }
 
   let readOutput;
+  const toolSets = host.querySelector("#agent-tool-sets");
+  const selectedSets = () => Array.from(toolSets.querySelectorAll("input:checked"), input => input.value);
   function persistDraft() {
     draft.save({
       name: name.value, instructions: instructions.value, prompt: prompt.value, text: text.value,
@@ -212,9 +215,20 @@ export async function mountConfiguration(page) {
       providerId: provider.value, model: model.value,
       modelId: catalog.models.find(m => m.name === model.value)?.id,
       outputSchema: readOutput?.(),
+      toolSets: selectedSets(),
     });
   }
   if (agentsPage) {
+    toolSets.hidden = Boolean(editing?.systemAgent);
+    for (const set of catalog.toolSets ?? []) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = set.id;
+      checkbox.checked = (draft.data?.toolSets ?? editing?.toolSets ?? []).includes(set.id);
+      label.append(checkbox, " " + set.name + " (" + set.tools.join(", ") + ")");
+      toolSets.append(label);
+    }
     const { mountOutputEditor } = await import("/admin/output-editor.js?v=" + encodeURIComponent(window.lyraAssetVersion));
     const output = host.querySelector("#agent-output");
     readOutput = mountOutputEditor(output, draft.data && "outputSchema" in draft.data
@@ -262,6 +276,7 @@ export async function mountConfiguration(page) {
         };
         payload = { name: name.value, instructions: ref(instructions), prompt: ref(prompt), outputSchema: readOutput(true) };
         payload.modelSelection = provider.value ? { providerId: provider.value, model: model.value } : null;
+        payload.toolSets = selectedSets();
         endpoint = "/api/admin/agents";
         if (editing) {
           endpoint += "/" + editing.id;

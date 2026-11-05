@@ -82,11 +82,13 @@ function AgentCard({ data }: NodeProps<Agent>) {
     </span>
     <div>
       <span className="item-kind">Agent</span><strong>{data.label}</strong>
+      {Boolean(data.definition?.toolSets?.length) && <small>Tool sets · {data.definition?.toolSets?.join(", ")}</small>}
       <small className="personality-port-label">Personality ↓</small>
       {error && <span className="agent-validation" title={error}>⚠ Configuration required</span>}
     </div>
     <Handle type="source" position={Position.Right} title="Agent output" className="flow-port" />
     <Handle type="target" id="personality" position={Position.Bottom} title="Personality input" className="flow-port personality-port" />
+    <Handle type="target" id="designer" position={Position.Bottom} style={{left:"80%"}} title="Flow Designer tool" className="flow-port designer-port" />
   </div>;
 }
 
@@ -103,10 +105,18 @@ function ApiResponseCard() {
   </div>;
 }
 
-const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, state: StateCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard, personality: PersonalityCard, recall: RecallCard, remember: RememberCard };
+function DesignerCard() {
+  return <div className="item-card designer-card"><span className="item-kind">Agent tool</span>
+    <strong>System Flow Designer</strong>
+    <Handle type="source" position={Position.Right} title="Flow Designer tool" className="flow-port designer-port" />
+  </div>;
+}
+
+const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, state: StateCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard, designer: DesignerCard, personality: PersonalityCard, recall: RecallCard, remember: RememberCard };
 const palette = [
   { type: "agent", title: "Agent" },
   { type: "personality", title: "Personality" },
+  { type: "designer", title: "Flow Designer tool" },
   { type: "recall", title: "Recall" },
   { type: "remember", title: "Remember" },
   { type: "json", title: "JSON" },
@@ -382,6 +392,8 @@ function Editor() {
     let item: FlowItem;
     if (entry.type === "agent") {
       item = { ...common, type: "agent", data: { label: "Unconfigured agent", definition: null } };
+    } else if (entry.type === "designer") {
+      item = { ...common, type: "designer", data: { label: "System Flow Designer" } };
     } else if (entry.type === "personality") {
       item = { ...common, type: "personality", data: { label: `Personality ${nextNumber.current++}` } };
     } else if (entry.type === "recall" || entry.type === "remember") {
@@ -449,7 +461,7 @@ function Editor() {
         <ReactFlow<FlowItem> nodes={items} nodeTypes={nodeTypes} onNodesChange={onNodesChange}
           defaultViewport={draft.data?.viewport} onMoveEnd={(_, value) => setViewport(value)}
           edges={edges.map(edge => ({
-            ...edge, label: edge.targetHandle === "memories" ? "Memories" : edge.targetHandle === "personality" ? "Personality" : edge.name,
+            ...edge, label: edge.targetHandle === "designer" ? "Flow Designer" : edge.targetHandle === "memories" ? "Memories" : edge.targetHandle === "personality" ? "Personality" : edge.name,
             className: edge.targetHandle ? edge.targetHandle + "-wire" : undefined,
             ariaLabel: `Connection ${edge.targetHandle || edge.name} (${edge.id})`, labelStyle: { fontSize: 11, fill: "#40336f" },
             labelBgStyle: { fill: "#f1edf8" }, labelBgBorderRadius: 4, labelBgPadding: [6, 4],
@@ -535,7 +547,8 @@ function Editor() {
         {selectedEdge && <>
           <h3>Connection</h3>
           {selectedEdge.targetHandle === "memories" ? <p>Supplies this Recall result to the connected agent.</p> :
-            selectedEdge.targetHandle === "personality" ? <p>Supplies the selected profile to this agent.</p> : wireSettings(selectedEdge)}
+            selectedEdge.targetHandle === "personality" ? <p>Supplies the selected profile to this agent.</p> :
+            selectedEdge.targetHandle === "designer" ? <p>Lets this agent delegate a design task during administrator chat.</p> : wireSettings(selectedEdge)}
           <h3>From</h3><p>{items.find(node => node.id === selectedEdge.source)?.data.label}</p>
           <h3>To</h3><p>{items.find(node => node.id === selectedEdge.target)?.data.label}</p>
           <p>This ID is preserved when the flow is saved or the connection is rewired.</p>
@@ -559,6 +572,16 @@ function Editor() {
           {selected.type === "remember" && <RememberProperties data={selected.data} agents={catalog.agents}
             change={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "agent" && <>
+            <label>Flow Designer connection<select value={edges.find(e => e.target === selected.id && e.targetHandle === "designer")?.source ?? ""}
+              onChange={e => {
+                const wire = edges.find(edge => edge.target === selected.id && edge.targetHandle === "designer");
+                const source = e.target.value;
+                if (!wire) connect({source, target:selected.id, sourceHandle:null, targetHandle:"designer"});
+                else setEdges(current => source ? current.map(edge => edge.id === wire.id ? {...edge, source} : edge) :
+                  current.filter(edge => edge.id !== wire.id));
+              }}><option value="">None</option>
+              {items.filter(item => item.type === "designer").map(item => <option key={item.id} value={item.id}>{item.data.label}</option>)}
+            </select></label>
             <PersonalityConnection cards={items.filter(item => item.type === "personality")} value={personalityEdge?.source ?? ""}
               change={source => {
                 if (!personalityEdge) {

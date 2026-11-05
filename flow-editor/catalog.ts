@@ -18,6 +18,7 @@ export type AgentDefinition = {
   prompt: PromptReference | null;
   outputSchema: { fields: OutputField[] } | null;
   revision: number;
+  toolSets?: string[];
   modelSelection?: { providerId: string; model: string } | null;
 };
 export type LibraryPrompt = PromptReference & { text: string };

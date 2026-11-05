@@ -117,6 +117,12 @@ def binding_summary(document):
 def bind(flow_id: UUID, body: Revision, request: Request):
     library = library_for(request)
     document = snapshot(library, flow_id, body.revision)
+    validate_chat_binding(library, document)
+    activate(library, document)
+    return binding_summary(document)
+
+
+def validate_chat_binding(library, document):
     if str(designer_id(library.name)) in document.agents:
         raise HTTPException(422, "The System Flow Designer requires an admin run and cannot serve public chat.")
     try:
@@ -125,8 +131,6 @@ def bind(flow_id: UUID, body: Revision, request: Request):
         raise HTTPException(422, str(exc)) from exc
     if not incoming["api-response"]:
         raise HTTPException(422, "Connect API Response before activating the flow for chat.")
-    activate(library, document)
-    return binding_summary(document)
 
 
 @router.delete("/chat-flow/{flow_id}")

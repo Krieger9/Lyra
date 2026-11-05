@@ -8,7 +8,7 @@ from pydantic import JsonValue
 from sqlalchemy import select
 
 from agent_output import run_agent
-from agent_store import (AgentDefinition, AgentUpdate, PromptWrite, agent_values, definitions,
+from agent_store import (AgentDefinition, AgentUpdate, PromptWrite, agent_values, definitions, designer_id,
                          execution_agents, lock_model_catalog, serialize_agent, validate_selection)
 from auth import require_admin_access
 from app_context import library_for
@@ -17,6 +17,7 @@ from flow_graph import FlowRun
 from json_mapping import MappingError
 from providers import catalog_entries
 from design_session import DesignSession
+from tool_sets import FLOW_DESIGN, TOOL_SETS
 
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin_access)])
@@ -34,7 +35,7 @@ def read_catalog(library):
             definitions.c.library == library.name).order_by(definitions.c.name, definitions.c.id)).mappings().all()
         models = catalog_entries(connection, library)
     prompts = [version for name in library.list_prompts() for version in library.list_versions(name)]
-    return {"agents": [serialize_agent(row) for row in rows], "prompts": prompts, **models}
+    return {"agents": [serialize_agent(row) for row in rows], "prompts": prompts, "toolSets": list(TOOL_SETS.values()), **models}
 
 
 @router.post("/agents", status_code=201)
@@ -55,6 +56,8 @@ def update_agent(agent_id: UUID, body: AgentUpdate, library=Depends(library_for)
     if "modelSelection" not in body.model_fields_set:
         values.pop("provider_id")
         values.pop("model_name")
+    if "toolSets" not in body.model_fields_set:
+        values.pop("tool_sets")
     with library.storage.engine.begin() as connection:
         lock_model_catalog(connection, library)
         validate_selection(connection, library, body.modelSelection)
@@ -75,8 +78,17 @@ class AgentTestInput(FlowRun):
 @router.post("/agents/{agent_id}/test")
 async def test_agent(agent_id: UUID, body: AgentTestInput, request: Request, response: Response):
     library = library_for(request)
+    designer = None
     with library.storage.engine.connect() as connection:
         definition = execution_agents(connection, library, [agent_id]).get(str(agent_id))
+        if definition and FLOW_DESIGN in definition["toolSets"] and not request.scope.get("lyra.system_agent_call"):
+            from delegated_designer import DesignerTurn
+            from run_store import activation
+            key = designer_id(library.name)
+            delegate = execution_agents(connection, library, [key]).get(str(key))
+            if delegate is None:
+                raise HTTPException(422, "System Flow Designer is unavailable.")
+            designer = DesignerTurn(request, activation(library), False, None, read_only=True, definition=delegate)
     if definition is None:
         raise HTTPException(404, "Agent definition not found.")
     response.headers["Cache-Control"] = "no-store"
@@ -91,7 +103,7 @@ async def test_agent(agent_id: UUID, body: AgentTestInput, request: Request, res
     try:
         output = await asyncio.wait_for(run_agent(library, request.app.state.studio, definition, body.input,
                                                   selection=body.inputSelection, chat_context=body.chatContext,
-                                                  design_session=session), 120)
+                                                  design_session=session, designer=designer), 120)
     except MappingError as exc:
         raise failure(422, str(exc)) from exc
     except HTTPException as exc:

@@ -10,11 +10,12 @@ export type JsonItem = Node<JsonNodeData, "json">;
 export type ApiInput = Node<{ label: string; chatInput?: boolean; recallMemories?: boolean; personalityId?: string | null }, "apiInput">;
 export type ApiResponse = Node<{ label: string }, "apiResponse">;
 export type Personality = Node<{ label: string; personalityId?: string | null }, "personality">;
+export type Designer = Node<{ label: string }, "designer">;
 export type Recall = Node<{label: string; includeQueryState?: boolean}, "recall">;
 export type Remember = Node<{label: string; rememberWhen?: "afterResponse" | "onEvidence";
   memoryEvidence?: "value" | "exchange"; extractorAgentId?: string | null}, "remember">;
 export type Agent = Node<{ label: string; definition: AgentDefinition | null; inputSelection?: InputSelection | null; usePersonality?: boolean }, "agent">;
-export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Personality | Agent | SwitchItem | StateItem | Recall | Remember;
+export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Personality | Designer | Agent | SwitchItem | StateItem | Recall | Remember;
 export type PanelSize = { width: number; height: number };
 type SavedNode = Exclude<FlowItem, Agent> | Node<Omit<Agent["data"], "definition"> & { definition: { id: string } | null }, "agent">;
 export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize; stateObject?: Record<string, unknown>; personalityMode?: "wired" | "legacy"; memoryMode?: "wired" | "legacy" };
@@ -181,6 +182,8 @@ export function allowsConnection(items: FlowItem[], edges: Wire[], connection: C
   const target = items.find(item => item.id === connection.target);
   if (!source || !target || source.id === target.id) return false;
   if (connection.targetHandle) {
+    if (connection.targetHandle === "designer") return source.type === "designer" && target.type === "agent" &&
+      !edges.some(edge => edge.id !== replacedEdgeId && edge.target === target.id && edge.targetHandle === "designer");
     if (connection.targetHandle === "memories") return source.type === "recall" && receivesMemories(target) &&
       !edges.some(edge => edge.id !== replacedEdgeId && edge.target === target.id && edge.targetHandle === "memories");
     return connection.targetHandle === "personality" && target.type === "agent" && source.type === "personality" &&
