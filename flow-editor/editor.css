@@ -58,6 +58,8 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .api-input-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: #dcefe7; color: #19624e; }
 .api-input-icon svg { width: 22px; height: 22px; }
 .api-input-card .item-kind { color: #316754; }
+.personality-card { border-color: #c999ad; background: #fff5f9; }
+.personality-card .item-kind { color: #85425f; }
 .api-response-card { display: flex; align-items: center; gap: 10px; width: 200px; border-color: #8bafcc; background: #f3f8fd; }
 .api-response-card .api-input-icon { color: #245b83; background: #dcebf7; flex: none; }
 .api-response-card .item-kind { color: #245b83; }
@@ -126,6 +128,15 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .run-inspector .trace-step { border-left: 3px solid transparent; padding-left: 8px; }
 .run-inspector .trace-step summary { cursor: pointer; padding-block: 3px; }
 .run-inspector .trace-step[open] { border-left-color: #59428a; background: #f6f3fa; }
+.run-timeline > button { margin-bottom: 8px; }
+.run-timeline .trace-group { margin: 0; border-top: 1px solid var(--line); }
+.run-timeline summary { cursor: pointer; }
+.trace-group > summary { padding: 9px 2px; }
+.trace-caption { display: block; margin: 3px 0 0 1em; font-size: .86em; color: #56505f; }
+.trace-problem > summary { color: #8b3127; }
+.trace-children { margin: 0 0 6px 7px; padding-left: 9px; border-left: 1px solid var(--line); }
+.trace-children .trace-phase, .trace-children .trace-step { margin-top: 0; }
+.trace-phase > summary { padding-block: 5px; }
 @media (max-width: 760px) {
   .run-layout { grid-template-columns: 1fr; grid-template-rows: minmax(110px, 35%) minmax(0, 1fr); }
 }

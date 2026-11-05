@@ -58,7 +58,7 @@ class NodeData(BaseModel):
 
 class FlowNode(BaseModel):
     id: str = Field(min_length=1, max_length=80)
-    type: Literal["apiInput", "apiResponse", "agent", "json", "item", "switch", "state"]
+    type: Literal["apiInput", "apiResponse", "personality", "agent", "json", "item", "switch", "state"]
     position: Position
     data: NodeData
 
@@ -68,8 +68,8 @@ class FlowNode(BaseModel):
             raise ValueError("A State element requires its own State definition.")
         if self.data.chatInput and self.type != "apiInput":
             raise ValueError("Chat request format belongs to API Input.")
-        if self.data.personalityId and self.type != "apiInput":
-            raise ValueError("Personality selection belongs to API Input.")
+        if self.data.personalityId and self.type not in ("personality", "apiInput"):
+            raise ValueError("Select a profile on the Personality element.")
         if self.data.inputSelection and self.type != "agent":
             raise ValueError("Input selection belongs to an Agent.")
         return self
@@ -125,7 +125,7 @@ class FlowGraph(BaseModel):
         check_size(value)
         return value
 
-    nodes: list[FlowNode] = Field(min_length=2, max_length=200)
+    nodes: list[FlowNode] = Field(min_length=2, max_length=201)
     edges: list[FlowEdge] = Field(default_factory=list, max_length=400)
     viewport: Viewport = Field(default_factory=lambda: Viewport(x=0, y=0, zoom=1))
     panelSize: PanelSize = Field(default_factory=lambda: PanelSize(width=280, height=240))
@@ -134,11 +134,26 @@ class FlowGraph(BaseModel):
     def chat_input(self):
         return next(node.data.chatInput for node in self.nodes if node.type == "apiInput")
 
+    @property
+    def personality_id(self):
+        for node in self.nodes:
+            if node.type == "personality":
+                return node.data.personalityId
+        # Older saved revisions carried the profile on API Input.
+        return next(node.data.personalityId for node in self.nodes if node.type == "apiInput")
+
     @model_validator(mode="after")
     def validate_graph(self):
         nodes = {node.id: node for node in self.nodes}
         if len(nodes) != len(self.nodes):
             raise ValueError("Node IDs must be unique")
+        personality_count = sum(node.type == "personality" for node in self.nodes)
+        if personality_count > 1:
+            raise ValueError("A flow can have only one Personality element.")
+        if len(nodes) - personality_count > 200:
+            raise ValueError("A flow can have up to 200 nodes plus Personality.")
+        if personality_count and any(n.type == "apiInput" and n.data.personalityId for n in self.nodes):
+            raise ValueError("Select the profile on the Personality element.")
         for kind, node_id in (("apiInput", "api-input"), ("apiResponse", "api-response")):
             matches = [node for node in self.nodes if node.type == kind]
             if len(matches) != 1 or matches[0].id != node_id:
@@ -270,7 +285,7 @@ def snapshot(library, flow_id, revision=None) -> FlowSnapshot:
     if revision is not None and row["revision"] != revision:
         raise HTTPException(409, "This flow changed. Reopen the saved revision before running or activating it.")
     graph = FlowGraph.model_validate(row["graph"])
-    personality_id = next(n.data.personalityId for n in graph.nodes if n.type == "apiInput")
+    personality_id = graph.personality_id
     return FlowSnapshot(**serialize_flow(row, include_graph=False), graph=graph,
                         agents=graph_agents(library, graph),
                         personality=load_personality(library, personality_id) if personality_id else None)

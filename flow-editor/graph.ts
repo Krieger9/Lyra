@@ -9,8 +9,9 @@ export type GenericItem = Node<{ label: string }, "item">;
 export type JsonItem = Node<JsonNodeData, "json">;
 export type ApiInput = Node<{ label: string; chatInput?: boolean; recallMemories?: boolean; personalityId?: string | null }, "apiInput">;
 export type ApiResponse = Node<{ label: string }, "apiResponse">;
+export type Personality = Node<{ label: string; personalityId?: string | null }, "personality">;
 export type Agent = Node<{ label: string; definition: AgentDefinition | null; inputSelection?: InputSelection | null; usePersonality?: boolean }, "agent">;
-export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Agent | SwitchItem | StateItem;
+export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Personality | Agent | SwitchItem | StateItem;
 export type PanelSize = { width: number; height: number };
 type SavedNode = Exclude<FlowItem, Agent> | Node<Omit<Agent["data"], "definition"> & { definition: { id: string } | null }, "agent">;
 export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize; stateObject?: Record<string, unknown> };
@@ -50,7 +51,7 @@ export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewpo
         ? { id: node.data.definition.id } : null,
         ...(node.type === "apiInput" && node.data.chatInput ? { chatInput: true } : {}),
         ...(node.type === "apiInput" ? { recallMemories: node.data.recallMemories ?? true } : {}),
-        ...(node.type === "apiInput" && node.data.personalityId ? { personalityId: node.data.personalityId } : {}),
+        ...(node.type === "personality" && node.data.personalityId ? { personalityId: node.data.personalityId } : {}),
         ...(node.type === "agent" && node.data.usePersonality === false ? { usePersonality: false } : {}),
         ...(node.type === "agent" && node.data.inputSelection ? { inputSelection: node.data.inputSelection } : {}),
         ...(node.type === "json" ? { objectDefinition: node.data.objectDefinition ?? null } : {}),
@@ -95,9 +96,22 @@ const responseNode: ApiResponse = {
 export function withEndpoints(nodes: FlowItem[] = []) {
   const input = nodes.find(node => node.type === "apiInput");
   const response = nodes.find(node => node.type === "apiResponse");
+  const personality = nodes.find(node => node.type === "personality");
+  const { personalityId, ...inputData } = input?.data ?? startingNode.data;
+  const start = { ...startingNode, ...input, id: startingNode.id, deletable: false, data: { ...inputData, ...startingNode.data } };
+  function newPersonality(): Personality {
+    const position = { x: start.position.x + 240, y: start.position.y + 110 };
+    while (nodes.some(node => Math.abs(node.position.x - position.x) < 220 && Math.abs(node.position.y - position.y) < 100)) {
+      position.y += 110;
+    }
+    let id = "personality";
+    for (let i = 2; nodes.some(node => node.id === id); i++) id = "personality-" + i;
+    return { id, type: "personality", position, data: { label: "Personality", personalityId } };
+  }
   return [
-    { ...startingNode, ...input, id: startingNode.id, deletable: false, data: { ...input?.data, ...startingNode.data } },
-    ...nodes.filter(node => node.type !== "apiInput" && node.type !== "apiResponse"),
+    start,
+    { ...(personality ?? newPersonality()), deletable: false, ariaLabel: "Personality, flow settings" },
+    ...nodes.filter(node => node.type !== "apiInput" && node.type !== "apiResponse" && node.type !== "personality"),
     { ...responseNode, ...response, id: responseNode.id, deletable: false, data: responseNode.data },
   ] as FlowItem[];
 }

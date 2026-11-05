@@ -12,7 +12,7 @@ import { AgentOutput } from "./agent-output";
 import { SelectionEditor } from "./chat-input";
 import { RunView } from "./run-view";
 import { MemoryStatus } from "./memory-status";
-import { PersonalityPicker } from "./personality";
+import { PersonalityCard, PersonalityPicker, PersonalityProvider } from "./personality";
 import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
 import { StateCard, StateInspector, StateObjectEditor, newState } from "./state";
 import { WireSettings } from "./wires";
@@ -62,8 +62,7 @@ function ApiInputCard({ data }: NodeProps<ApiInput>) {
       </svg>
     </span>
     <div><span className="item-kind">Flow start</span><strong>{data.label}</strong>
-      {(data.recallMemories ?? true) && <small>Recall long-term memories</small>}
-      {data.personalityId && <small>Load personality + goals + memories</small>}</div>
+      {(data.recallMemories ?? true) && <small>Recall long-term memories</small>}</div>
     <Handle type="source" position={Position.Right} title="API Input output" className="flow-port" />
   </div>;
 }
@@ -99,7 +98,7 @@ function ApiResponseCard() {
   </div>;
 }
 
-const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, state: StateCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard };
+const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, state: StateCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard, personality: PersonalityCard };
 const palette = [
   { type: "agent", title: "Agent" },
   { type: "json", title: "JSON" },
@@ -506,8 +505,9 @@ function Editor() {
             onChange={e => updateNodeData(selected.id, {recallMemories:e.target.checked})} />Recall long-term memories</label>
           <p>Search saved memories using the latest message and prior context. Relevant facts are supplied to agents
             before they answer, including in a new chat. Inspect API Input in run history to see the recalled memories.</p>
-          <PersonalityPicker value={selected.data.personalityId} change={personalityId => updateNodeData(selected.id, {personalityId})} />
         </>}
+        {selected?.type === "personality" && <PersonalityPicker value={selected.data.personalityId}
+          change={personalityId => updateNodeData(selected.id, {personalityId})} />}
         {selected?.type === "apiResponse" && <>
           <strong>API Response</strong>
           <p>Returns HTTP 200 on success, or an error status if the flow fails.</p>
@@ -521,7 +521,7 @@ function Editor() {
           <h3>To</h3><p>{items.find(node => node.id === selectedEdge.target)?.data.label}</p>
           <p>This ID is preserved when the flow is saved or the connection is rewired.</p>
         </>}
-        {selected && selected.type !== "apiInput" && <>
+        {selected && selected.type !== "apiInput" && selected.type !== "personality" && <>
           {selected.type === "agent" && <>
             <label><input type="checkbox" checked={selected.data.usePersonality ?? true}
               onChange={e => updateNodeData(selected.id, {usePersonality: e.target.checked})} />Use the flow’s personality</label>
@@ -629,4 +629,4 @@ function Editor() {
 }
 
 const host = document.getElementById("flow-editor");
-if (host) createRoot(host).render(<ReactFlowProvider><Editor /></ReactFlowProvider>);
+if (host) createRoot(host).render(<ReactFlowProvider><PersonalityProvider><Editor /></PersonalityProvider></ReactFlowProvider>);

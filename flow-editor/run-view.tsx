@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Background, Controls, Position, ReactFlow, ReactFlowProvider, type Edge, type Node } from "@xyflow/react";
+import { RunTimeline } from "./run-timeline";
+import { eventLabel, isSetup, type Entry } from "./timeline";
 import type { SwitchDefinition } from "./switch";
 import { otherwise } from "./graph";
 import { useSampleInput, type InputSelection } from "./chat-input";
@@ -9,7 +11,6 @@ type Graph = { nodes: { id: string; type: string; position: { x: number; y: numb
 type Document = { id: string; name: string; revision: number; graph: Graph;
   personality?: {id: string; name: string; revision: number; template: string; goals: string[];
     memories: {id: string; content: string; sourceMemoryId?: string | null}[]} | null };
-type Entry = { seq: number; node: string | null; kind: string; at: string; elapsed_ms: number; data: Record<string, unknown> };
 type Summary = { id: string; source: string; revision: number; status: string; started_at: string };
 type MemoryLink = {id: string; content: string; relation: "created" | "reinforced" | "recalled"; node: string; evidence?: string};
 type RecordPage = Summary & { snapshot?: Document; events: Entry[]; hasMore: boolean; result: unknown; error?: string;
@@ -19,29 +20,6 @@ const api = <T,>(path: string, options?: RequestInit) => window.lyraAdminRequest
 const json = (method: string, body: unknown) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const message = (failure: unknown) => failure instanceof Error ? failure.message : "Request failed.";
-
-function eventLabel(event: Entry) {
-  const data = event.data;
-  switch (event.kind) {
-    case "personality.rendered": return `Personality · ${data.name} · revision ${data.revision}`;
-    case "memory.recalled": return `Recalled ${data.count ?? (data.ids as unknown[] | undefined)?.length ?? 0} memories`;
-    case "memory.extracted": return `Selected ${data.count} memories to save`;
-    case "memory.committed": return `Committed ${data.count} memory selections`;
-    case "switch.selected": return `Selected path · ${data.label}`;
-    case "node.skipped": return "Skipped · inactive input path";
-    case "gate.evaluated": return `${data.passed ? "Pass" : "Fail"} · ${data.field ?? "output"} · ${data.operation}`;
-    case "mapping.applied": return `${data.source} → ${data.target}`;
-    case "input.selected": return `${data.source === "chat" ? "Original chat" : "Incoming wire"} · ${data.priorTurns} prior turns`;
-    case "template.started": return `Render ${data.part} template`;
-    case "template.rendered": return `Rendered ${data.part}`;
-    case "schema.inserted": return "Insert output schema";
-    case "model.request": return "Send rendered prompt";
-    case "model.response": return `Model reply · ${data.duration_ms} ms`;
-    case "provider.request": return `${data.provider} request body`;
-    case "provider.response": return `${data.provider} response · HTTP ${data.status}`;
-    default: return event.kind;
-  }
-}
 
 // A wire ID identifies a connection even if the design has since been renamed.
 function eventWires(event?: Entry): Set<unknown> | undefined {
@@ -145,6 +123,7 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
   }
   const doc = run?.snapshot ?? design;
   const entries = run?.events ?? [];
+  const setup = entries.filter(isSetup);
   const states = new Map<string, string>();
   const selectedPaths = new Map<string, unknown>();
   for (const e of entries) {
@@ -170,7 +149,8 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     setEventSeq(null);
     if (id) requestAnimationFrame(() => timeline.current?.scrollIntoView({ block: "nearest" }));
   }
-  const nodes: Node[] = doc.graph.nodes.map(node => {
+  // Personality configures participating agents; only executable steps have run status.
+  const nodes: Node[] = doc.graph.nodes.filter(node => node.type !== "personality").map(node => {
     const state = states.get(node.id) ?? (run && run.status !== "running" ? "skipped" : "pending");
     return {id:node.id, position:node.position, measured:measurements.current.get(node.id),
       sourcePosition:Position.Right, targetPosition:Position.Left,
@@ -219,7 +199,11 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
           {isActive && <button disabled={busy} onClick={() => changeActivation(true)}>Reactivate with latest personality and agents</button>}</details>
         {error && <p role="alert">{error}</p>}
         {run && <><h3>Run result</h3><p aria-live="polite">{run.status} · {run.source} · revision {run.revision} · {entries.at(-1)?.elapsed_ms ?? 0} ms</p>
-          <small>{run.id}</small>{run.error && <p role="alert">{run.error}</p>}
+          <small>Started {new Date(run.started_at).toLocaleString()} · {run.id}</small>{run.error && <p role="alert">{run.error}</p>}
+          {setup.length > 0 && <details><summary>Execution plan and input</summary>
+            {setup.map(e =>
+              <details key={e.seq}><summary>{eventLabel(e)}</summary><pre>{pretty(e.data)}</pre></details>)}
+          </details>}
           {run.status==="completed" && <pre>{pretty(run.result)}</pre>}
           <button disabled={run.status==="running" || run.hasMore} onClick={()=>download(run)}>Export run JSON</button>
           {run.snapshot?.personality && <>
@@ -241,15 +225,8 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
           {selected && first && <details><summary>Incoming wire values</summary><pre>{pretty(first.data.inputs)}</pre></details>}
           {selected && last && <details><summary>Node output · {String(last.data.duration_ms)} ms</summary><pre>{pretty(last.data.output)}</pre></details>}
           {selected && !visible.length && <p>This node has no recorded events.</p>}
-          {visible.map(e => <details key={e.seq} open={e.seq === eventSeq} className="trace-step">
-            <summary onClick={click => {
-              click.preventDefault();
-              setEventSeq(current => current === e.seq ? null : e.seq);
-            }}>
-              <strong>{doc.graph.nodes.find(n => n.id === e.node)?.data.label || e.node || "Flow"}</strong>
-              {" · "}#{e.seq} · {eventLabel(e)} · +{e.elapsed_ms} ms
-            </summary>
-            <small>{e.at}</small><pre>{pretty(e.data)}</pre></details>)}
+          <RunTimeline key={run.id + nodeId} entries={entries} nodes={doc.graph.nodes} status={run.status}
+            nodeId={nodeId} selectedSeq={eventSeq} selectEvent={setEventSeq}/>
         </>}
       </aside>
     </div></div>;

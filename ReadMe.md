@@ -285,7 +285,7 @@ goals and up to 24 curated memories. The supported placeholders are `{{name}}`, 
 personality section without calling a model. Template substitution is literal and does not execute
 Jinja code. Goals are guidance for the model, not scheduled tasks or a separate goal executor.
 
-On a flow's **API Input**, select a personality, save, and activate the flow for chat. Agent nodes
+Select the **Flow personality** card beside API Input, choose a profile in **Properties**, then save and activate the flow for chat. Agent nodes
 include it by default; clear **Use the flow's personality** for classifiers or other neutral agents.
 State updaters and memory extraction retain their own instructions. The run inspector records the
 resolved prompt and the profile revision, goals and memories used. The personality editor links to

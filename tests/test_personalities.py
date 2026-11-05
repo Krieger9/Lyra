@@ -2,10 +2,28 @@ import unittest
 from uuid import uuid4
 from pydantic import ValidationError
 
+from flow_graph import FlowGraph
 from personalities import PersonalityWrite, SavedPersonality, render_personality
 
 
 class PersonalityTemplateTests(unittest.TestCase):
+    def test_flow_personality_selection_in_new_and_legacy_graphs(self):
+        profile_id = uuid4()
+        position = {"x": 0, "y": 0}
+        start = {"type": "apiInput", "id": "api-input", "position": position, "data": {}}
+        response = {"type": "apiResponse", "id": "api-response", "position": position, "data": {}}
+        card = {"type": "personality", "id": "profile", "position": position, "data": {"personalityId": profile_id}}
+        legacy = start | {"data": card["data"]}
+        self.assertEqual(FlowGraph(nodes=[start, card, response]).personality_id, profile_id)
+        self.assertEqual(FlowGraph(nodes=[legacy, response]).personality_id, profile_id)
+        self.assertIsNone(FlowGraph(nodes=[start, card | {"data": {}}, response]).personality_id)
+        with self.assertRaises(ValidationError):
+            FlowGraph(nodes=[start, card, card | {"id": "second"}, response])
+        with self.assertRaises(ValidationError):
+            FlowGraph(nodes=[legacy, card, response])
+        with self.assertRaises(ValidationError):
+            FlowGraph(nodes=[start, card, response], edges=[{"id": "wire", "source": "api-input", "target": "profile"}])
+
     def test_literal_substitution_and_required_sections(self):
         body = PersonalityWrite(name="Lyra", template="You are {{ name }}.", goals=["Be curious"],
                                 memories=[{"content": "A literal {{name}} in a memory"}])

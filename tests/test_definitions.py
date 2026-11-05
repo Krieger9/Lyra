@@ -253,7 +253,8 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             profile = (await self.client.post("/api/admin/personalities", json=body)).json()
             agent = (await self.client.post("/api/admin/agents", json={"name": "Personality agent"})).json()
             graph = self.flow_graph()
-            graph["nodes"][0]["data"]["personalityId"] = profile["id"]
+            graph["nodes"].append({"id": "persona", "type": "personality", "position": {"x": 200, "y": 200},
+                                   "data": {"label": "Personality", "personalityId": profile["id"]}})
             graph["nodes"].append({"id": "voice", "type": "agent", "position": {"x": 400, "y": 100},
                                    "data": {"definition": {"id": agent["id"]}}})
             graph["edges"] = [{"id": "in", "source": "api-input", "target": "voice"},
