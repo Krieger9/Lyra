@@ -49,15 +49,15 @@ def save_memories(connection, library, owner, candidates, run_id):
     return links
 
 
-def record_recalls(connection, library, owner, recalled, run_id):
+def record_recalls(connection, library, owner, recalled, run_id, node="api-input"):
     schema = schema_name(connection)
     for memory in recalled:
         connection.execute(text(f"""
             INSERT INTO {schema}.memory_turns (memory_id, run_id, relation, node)
-            SELECT id, :run_id, 'recalled', 'api-input' FROM {schema}.memories
+            SELECT id, :run_id, 'recalled', :node FROM {schema}.memories
             WHERE id = :id AND library = :library AND owner = :owner
             ON CONFLICT DO NOTHING
-        """), {"run_id": run_id, "id": memory["id"], "library": library, "owner": owner})
+        """), {"run_id": run_id, "id": memory["id"], "library": library, "owner": owner, "node": node})
 
 
 def list_memories(library, owner=None, query="", offset=0, limit=50):

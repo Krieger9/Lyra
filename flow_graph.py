@@ -47,6 +47,10 @@ class NodeData(BaseModel):
     label: str = Field(default="", max_length=120)
     chatInput: bool = False
     recallMemories: bool = True
+    includeQueryState: bool = False
+    rememberWhen: Literal["afterResponse", "onEvidence"] = "afterResponse"
+    memoryEvidence: Literal["value", "exchange"] = "value"
+    extractorAgentId: UUID | None = None
     personalityId: UUID | None = None
     usePersonality: bool = True
     inputSelection: InputSelection | None = None
@@ -58,7 +62,7 @@ class NodeData(BaseModel):
 
 class FlowNode(BaseModel):
     id: str = Field(min_length=1, max_length=80)
-    type: Literal["apiInput", "apiResponse", "personality", "agent", "json", "item", "switch", "state"]
+    type: Literal["apiInput", "apiResponse", "personality", "agent", "json", "item", "switch", "state", "recall", "remember"]
     position: Position
     data: NodeData
 
@@ -80,6 +84,7 @@ class FlowEdge(BaseModel):
     source: str
     sourceHandle: str | None = Field(default=None, max_length=80)
     target: str
+    targetHandle: Literal["personality", "memories"] | None = None
     name: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
     readAs: Literal["value", "json"] = "value"
 
@@ -117,6 +122,8 @@ def path_requirements(node, parents, requirements):
 
 
 class FlowGraph(BaseModel):
+    memoryMode: Literal["wired", "legacy"] = "wired"
+    personalityMode: Literal["wired", "legacy"] = "wired"
     stateObject: dict[str, JsonValue] = Field(default_factory=dict, max_length=64)
 
     @field_validator("stateObject")
@@ -125,8 +132,8 @@ class FlowGraph(BaseModel):
         check_size(value)
         return value
 
-    nodes: list[FlowNode] = Field(min_length=2, max_length=201)
-    edges: list[FlowEdge] = Field(default_factory=list, max_length=400)
+    nodes: list[FlowNode] = Field(min_length=2, max_length=402)
+    edges: list[FlowEdge] = Field(default_factory=list, max_length=1000)
     viewport: Viewport = Field(default_factory=lambda: Viewport(x=0, y=0, zoom=1))
     panelSize: PanelSize = Field(default_factory=lambda: PanelSize(width=280, height=240))
 
@@ -134,13 +141,36 @@ class FlowGraph(BaseModel):
     def chat_input(self):
         return next(node.data.chatInput for node in self.nodes if node.type == "apiInput")
 
+    @classmethod
+    def from_saved(cls, graph):
+        if isinstance(graph, dict):
+            modes = {"personalityMode": "legacy", "memoryMode": "legacy"}
+            parsed = cls.model_validate({**modes, **graph})
+            # A run made from an old activation must retain the original snapshot fields.
+            parsed.model_fields_set.difference_update(modes.keys() - graph.keys())
+            return parsed
+        return cls.model_validate(graph)
+
     @property
-    def personality_id(self):
-        for node in self.nodes:
-            if node.type == "personality":
-                return node.data.personalityId
-        # Older saved revisions carried the profile on API Input.
-        return next(node.data.personalityId for node in self.nodes if node.type == "apiInput")
+    def data_edges(self):
+        return [edge for edge in self.edges if edge.targetHandle is None]
+
+    @property
+    def uses_memory(self):
+        operations = {n.id for n in self.nodes if n.type in ("recall", "remember")}
+        return self.memoryMode == "legacy" or any(e.target in operations for e in self.edges)
+
+    @property
+    def memory_sources(self):
+        return {edge.target: edge.source for edge in self.edges if edge.targetHandle == "memories"}
+
+    @property
+    def agent_profile_ids(self):
+        cards = {n.id: n.data.personalityId for n in self.nodes if n.type == "personality"}
+        if self.personalityMode == "legacy":
+            profile = next(iter(cards.values()), None) or next(n.data.personalityId for n in self.nodes if n.type == "apiInput")
+            return {n.id: profile for n in self.nodes if profile and n.type == "agent" and n.data.usePersonality}
+        return {e.target: cards[e.source] for e in self.edges if e.targetHandle == "personality" and cards[e.source]}
 
     @model_validator(mode="after")
     def validate_graph(self):
@@ -148,11 +178,24 @@ class FlowGraph(BaseModel):
         if len(nodes) != len(self.nodes):
             raise ValueError("Node IDs must be unique")
         personality_count = sum(node.type == "personality" for node in self.nodes)
-        if personality_count > 1:
-            raise ValueError("A flow can have only one Personality element.")
-        if len(nodes) - personality_count > 200:
+        old_input = any(n.type == "apiInput" and n.data.personalityId for n in self.nodes)
+        if self.personalityMode == "wired" and "personalityMode" not in self.model_fields_set:
+            # Snapshots omit unset fields. Record the mode even when writing a disconnected card.
+            self.personalityMode = "legacy" if old_input else "wired"
+        if self.personalityMode == "legacy" and personality_count > 1:
+            raise ValueError("Legacy flows support one flow-wide personality.")
+        memory_count = sum(n.type in ("recall", "remember") for n in self.nodes)
+        if self.memoryMode == "wired" and "memoryMode" not in self.model_fields_set:
+            # Older editor clients posted the switches directly on API Input and State.
+            legacy_controls = any((n.type == "apiInput" and "recallMemories" in n.data.model_fields_set) or
+                                  (n.type == "state" and "captureMemories" in n.data.stateDefinition.model_fields_set)
+                                  for n in self.nodes)
+            self.memoryMode = "legacy" if legacy_controls and not memory_count else "wired"
+        if self.memoryMode == "legacy" and memory_count:
+            raise ValueError("Use wired memory for Recall and Remember elements.")
+        if len(nodes) - personality_count - memory_count > 200:
             raise ValueError("A flow can have up to 200 nodes plus Personality.")
-        if personality_count and any(n.type == "apiInput" and n.data.personalityId for n in self.nodes):
+        if old_input and (personality_count or self.personalityMode == "wired"):
             raise ValueError("Select the profile on the Personality element.")
         for kind, node_id in (("apiInput", "api-input"), ("apiResponse", "api-response")):
             matches = [node for node in self.nodes if node.type == kind]
@@ -162,8 +205,10 @@ class FlowGraph(BaseModel):
         ids = set()
         names = set()
         single_inputs = set()
+        personality_inputs = set()
+        memory_inputs = set()
         for edge in self.edges:
-            if edge.name:
+            if edge.name and edge.targetHandle is None:
                 key = (edge.target, edge.name)
                 if key in names:
                     raise ValueError("Incoming wire names must be distinct on the same node")
@@ -176,6 +221,19 @@ class FlowGraph(BaseModel):
             allowed = source.type in ("apiInput", "agent", "json", "switch", "state") and target.type in ("agent", "json", "switch", "state")
             allowed = allowed or (source.type in ("agent", "json", "switch", "state") and target.type == "apiResponse")
             allowed = allowed or (source.type == "apiResponse" and target.type == "state")
+            allowed = allowed or (source.type in ("apiInput", "apiResponse", "agent", "json", "switch", "state")
+                                  and target.type in ("recall", "remember"))
+            if edge.targetHandle == "memories":
+                allowed = source.type == "recall" and (target.type == "agent" or
+                    (target.type == "state" and target.data.stateDefinition.operation in ("generate", "generateObject")))
+                if target.id in memory_inputs:
+                    raise ValueError("Connect one Recall to each Memories port.")
+                memory_inputs.add(target.id)
+            if edge.targetHandle == "personality":
+                allowed = self.personalityMode == "wired" and source.type == "personality" and target.type == "agent"
+                if target.id in personality_inputs:
+                    raise ValueError("An agent accepts one Personality connection.")
+                personality_inputs.add(target.id)
             if not allowed:
                 raise ValueError("This connection is not supported")
             if source.type == "switch":
@@ -184,7 +242,7 @@ class FlowGraph(BaseModel):
                     raise ValueError("Select an existing Switch path for this wire.")
             elif edge.sourceHandle is not None:
                 raise ValueError("Only Switch outputs have named ports.")
-            if target.type == "switch":
+            if target.type in ("switch", "recall", "remember"):
                 if target.id in single_inputs:
                     raise ValueError(f"A {target.type.title()} accepts one input.")
                 single_inputs.add(target.id)
@@ -194,7 +252,9 @@ class FlowGraph(BaseModel):
             ids.add(edge.id)
             seen.add(connection)
         incoming = {key: [] for key in nodes}
-        for edge in self.edges:
+        if sum(nodes[e.target].type not in ("recall", "remember") for e in self.data_edges) > 400:
+            raise ValueError("A flow can have up to 400 data wires.")
+        for edge in self.data_edges:
             incoming[edge.target].append(edge)
         if len(incoming["api-response"]) > 1 or any(e.source == "api-response" for e in self.edges):
             requirements = {}
@@ -239,7 +299,7 @@ class FlowRun(BaseModel):
 def serialize_flow(row, include_graph=True):
     value = {"id": str(row["id"]), "name": row["name"], "revision": row["revision"]}
     if include_graph:
-        value["graph"] = row["graph"]
+        value["graph"] = {"personalityMode": "legacy", "memoryMode": "legacy", **row["graph"]}
     return value
 
 
@@ -275,6 +335,17 @@ class FlowSnapshot(BaseModel):
     graph: FlowGraph
     agents: dict[str, SavedAgent]
     personality: SavedPersonality | None = None
+    personalities: dict[UUID, SavedPersonality] = Field(default_factory=dict)
+
+    @field_validator("graph", mode="before")
+    @classmethod
+    def read_saved_graph(cls, value):
+        return FlowGraph.from_saved(value)
+
+    def profiles(self):
+        if self.personality:
+            return {self.personality.id: self.personality}
+        return self.personalities
 
     def agent_definitions(self):
         return {key: agent.model_dump(mode="json") for key, agent in self.agents.items()}
@@ -284,11 +355,11 @@ def snapshot(library, flow_id, revision=None) -> FlowSnapshot:
     row = load_flow(library, flow_id)
     if revision is not None and row["revision"] != revision:
         raise HTTPException(409, "This flow changed. Reopen the saved revision before running or activating it.")
-    graph = FlowGraph.model_validate(row["graph"])
-    personality_id = graph.personality_id
+    graph = FlowGraph.from_saved(row["graph"])
+    profiles = {key: load_personality(library, key) for key in dict.fromkeys(graph.agent_profile_ids.values())}
     return FlowSnapshot(**serialize_flow(row, include_graph=False), graph=graph,
                         agents=graph_agents(library, graph),
-                        personality=load_personality(library, personality_id) if personality_id else None)
+                        personalities=profiles)
 
 
 def graph_agents(library, graph):
@@ -296,5 +367,6 @@ def graph_agents(library, graph):
            if node.type == "agent" and node.data.definition]
     ids.extend(node.data.stateDefinition.agentId for node in graph.nodes if node.type == "state" and
                node.data.stateDefinition.operation in ("generate", "generateObject") and node.data.stateDefinition.agentId)
+    ids.extend(node.data.extractorAgentId for node in graph.nodes if node.type == "remember" and node.data.extractorAgentId)
     with library.storage.engine.connect() as conn:
         return execution_agents(conn, library, ids)

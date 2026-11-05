@@ -195,8 +195,10 @@ def used_in(personality_id: UUID, request: Request):
     with library.storage.engine.connect() as connection:
         schema = schema_name(connection)
         return [dict(row) for row in connection.execute(text(f"SELECT id,flow_id,started_at,status, "
-            f"snapshot->'personality'->>'revision' AS personality_revision FROM {schema}.flow_runs r "
-            "WHERE library=:library AND snapshot->'personality'->>'id'=:id "
+            f"COALESCE(snapshot->'personalities'->CAST(:id AS text)->>'revision', "
+            f"snapshot->'personality'->>'revision') AS personality_revision FROM {schema}.flow_runs r "
+            "WHERE library=:library AND (jsonb_exists(snapshot->'personalities', :id) OR snapshot->'personality'->>'id'=:id) "
             f"AND EXISTS (SELECT 1 FROM {schema}.flow_run_events e WHERE e.run_id=r.id "
-            "AND e.kind='personality.rendered') ORDER BY started_at DESC LIMIT 50"),
+            "AND e.kind IN ('personality.rendered','identity.context') "
+            "AND COALESCE(e.data->>'id', snapshot->'personality'->>'id')=:id) ORDER BY started_at DESC LIMIT 50"),
             {"id": str(personality_id), "library": library.name}).mappings()]

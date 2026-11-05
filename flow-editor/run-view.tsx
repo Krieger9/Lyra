@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Background, Controls, Position, ReactFlow, ReactFlowProvider, type Edge, type Node } from "@xyflow/react";
 import { RunTimeline } from "./run-timeline";
 import { eventLabel, isSetup, type Entry } from "./timeline";
@@ -6,16 +6,17 @@ import type { SwitchDefinition } from "./switch";
 import { otherwise } from "./graph";
 import { useSampleInput, type InputSelection } from "./chat-input";
 
-type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string; chatInput?: boolean; inputSelection?: InputSelection | null; switchDefinition?: SwitchDefinition | null } }[];
+type Graph = { nodes: { id: string; type: string; position: { x: number; y: number }; data: { label: string; chatInput?: boolean; personalityId?: string | null; inputSelection?: InputSelection | null; switchDefinition?: SwitchDefinition | null } }[];
   edges: (Edge & { name?: string | null })[] };
+type Profile = {id: string; name: string; revision: number; template: string; goals: string[];
+  memories: {id: string; content: string; sourceMemoryId?: string | null}[]};
 type Document = { id: string; name: string; revision: number; graph: Graph;
-  personality?: {id: string; name: string; revision: number; template: string; goals: string[];
-    memories: {id: string; content: string; sourceMemoryId?: string | null}[]} | null };
+  personality?: Profile | null; personalities?: Record<string, Profile> };
 type Summary = { id: string; source: string; revision: number; status: string; started_at: string };
 type MemoryLink = {id: string; content: string; relation: "created" | "reinforced" | "recalled"; node: string; evidence?: string};
 type RecordPage = Summary & { snapshot?: Document; events: Entry[]; hasMore: boolean; result: unknown; error?: string;
   memories?: MemoryLink[] };
-type Binding = Pick<Document, "id" | "name" | "revision"> & {personality?: {id: string; name: string; revision: number} | null};
+type Binding = Pick<Document, "id" | "name" | "revision"> & {personalities: Pick<Profile, "id" | "name" | "revision">[]};
 const api = <T,>(path: string, options?: RequestInit) => window.lyraAdminRequest<T>("/api/admin" + path, options);
 const json = (method: string, body: unknown) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
@@ -122,6 +123,7 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
   const doc = run?.snapshot ?? design;
+  const profiles = Object.values(doc.personalities ?? (doc.personality ? {[doc.personality.id]: doc.personality} : {}));
   const entries = run?.events ?? [];
   const setup = entries.filter(isSetup);
   const states = new Map<string, string>();
@@ -141,7 +143,8 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     const path = edge.sourceHandle && [...(doc.graph.nodes.find(n => n.id === edge.source)?.data.switchDefinition?.paths ?? []),
       otherwise].find(p => p.id === edge.sourceHandle);
     // Run cards use one read-only handle. Keep the design's named port visible on the wire.
-    return { ...edge, sourceHandle: null, label: path ? path.label + " · " + edge.name : edge.name, animated: states.get(edge.target) === "started",
+    return { ...edge, sourceHandle: null, targetHandle: null, label: edge.targetHandle === "memories" ? "Memories" :
+      edge.targetHandle === "personality" ? "Personality" : path ? path.label + " · " + edge.name : edge.name, animated: !edge.targetHandle && states.get(edge.target) === "started",
       className: focusId ? (highlighted ? "trace-wire-active" : "trace-wire-muted") : undefined };
   });
   function selectNode(id: string) {
@@ -150,13 +153,14 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
     if (id) requestAnimationFrame(() => timeline.current?.scrollIntoView({ block: "nearest" }));
   }
   // Personality configures participating agents; only executable steps have run status.
-  const nodes: Node[] = doc.graph.nodes.filter(node => node.type !== "personality").map(node => {
+  const nodes: Node[] = doc.graph.nodes.map(node => {
     const state = states.get(node.id) ?? (run && run.status !== "running" ? "skipped" : "pending");
     return {id:node.id, position:node.position, measured:measurements.current.get(node.id),
       sourcePosition:Position.Right, targetPosition:Position.Left,
-      data:{label:<><strong>{node.data.label || node.type}</strong><small>{state}</small>
+      data:{label:<><strong>{node.data.label || node.type}</strong><small>{node.type === "personality"
+        ? profiles.find(p => p.id === node.data.personalityId)?.name ?? "Profile reference" : state}</small>
         {selectedPaths.has(node.id) && <small>Path · {String(selectedPaths.get(node.id))}</small>}</>},
-      className:[`trace-node trace-${state}`, node.id === focusId ? "trace-focus" :
+      className:[node.type === "personality" ? "trace-node personality-card" : `trace-node trace-${state}`, node.id === focusId ? "trace-focus" :
         neighbors.has(node.id) ? "trace-neighbor" : focusId ? "trace-muted" : ""].join(" "),
       selected:node.id === focusId, ariaRole:"button", ariaLabel:node.data.label || node.type,
       domAttributes:{ "aria-pressed":node.id === focusId, onKeyDown:(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -194,7 +198,7 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
         <h3>Run saved flow</h3>{controls}
         <button disabled={busy} onClick={start}>Run revision {design.revision}</button>
         <details><summary>Chat connection</summary><p>{binding ? `Active: ${binding.name} · revision ${binding.revision}` : "Chat uses the default prompt."}</p>
-          {binding?.personality && <p>Personality: {binding.personality.name} · revision {binding.personality.revision}</p>}
+          {binding?.personalities.map(p => <p key={p.id}>{p.name} · revision {p.revision}</p>)}
           <button disabled={busy} onClick={() => changeActivation()}>{isActive ? "Disconnect from chat" : "Use this revision in Lyra chat"}</button>
           {isActive && <button disabled={busy} onClick={() => changeActivation(true)}>Reactivate with latest personality and agents</button>}</details>
         {error && <p role="alert">{error}</p>}
@@ -204,14 +208,15 @@ export function RunView({ design, onClose }: { design: Document; onClose: () => 
             {setup.map(e =>
               <details key={e.seq}><summary>{eventLabel(e)}</summary><pre>{pretty(e.data)}</pre></details>)}
           </details>}
-          {run.status==="completed" && <pre>{pretty(run.result)}</pre>}
+          {(run.status === "completed" || entries.some(e => e.kind === "response.ready")) &&
+            <><h3>API Response</h3><pre>{pretty(run.result)}</pre></>}
           <button disabled={run.status==="running" || run.hasMore} onClick={()=>download(run)}>Export run JSON</button>
-          {run.snapshot?.personality && <>
+          {profiles.map(profile => <Fragment key={profile.id}>
             <h3>Personality snapshot</h3>
-            <a href={`/admin/personalities/?id=${encodeURIComponent(run.snapshot.personality.id)}`}>{run.snapshot.personality.name}</a>
-            <p>Revision {run.snapshot.personality.revision} · see personality events for the rendered prompt on each participating agent.</p>
-            <details><summary>Saved prompt, goals and memories</summary><pre>{pretty(run.snapshot.personality)}</pre></details>
-          </>}
+            <a href={`/admin/personalities/?id=${encodeURIComponent(profile.id)}`}>{profile.name}</a>
+            <p>Revision {profile.revision} · see the connected agent’s events for its prompt.</p>
+            <details><summary>Saved prompt, goals and memories</summary><pre>{pretty(profile)}</pre></details>
+          </Fragment>)}
           <h3>Memories associated with this turn</h3>
           {(run.memories ?? []).length ? <ul>{run.memories!.map(memory => <li key={`${memory.id}:${memory.relation}:${memory.node}`}>
             <strong>{memory.relation === "created" ? "Created" : memory.relation === "reinforced" ? "Reinforced" : "Recalled"}</strong>

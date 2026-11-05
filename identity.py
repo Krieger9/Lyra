@@ -203,6 +203,25 @@ Use at most 16 tool calls, then answer. Do not call tools gratuitously. Mood aff
 """
 
 
+class TurnIdentities:
+    """Share a profile's private session only among its executing agents this turn."""
+    def __init__(self, library, owner, source, observe):
+        self.library, self.owner, self.source, self.observe = library, owner, source, observe
+        self.sessions = {}
+        self.replies = {}
+
+    def for_profile(self, profile):
+        if not profile or not profile.continuityEnabled:
+            return None
+        if profile.id not in self.sessions:
+            self.sessions[profile.id] = IdentitySession(self.library, self.owner, profile, self.source, self.observe)
+        return self.sessions[profile.id]
+
+    async def reflect(self, chat):
+        for profile_id, reply in self.replies.items():
+            await self.sessions[profile_id].reflect(chat, reply)
+
+
 class IdentitySession:
     def __init__(self, library, owner, personality, source, observe=None):
         self.library, self.owner, self.personality = library, owner, personality

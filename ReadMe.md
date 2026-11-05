@@ -87,7 +87,7 @@ In the State inspector, **Map input fields** copies whole incoming values or sel
 
 Choose **Pass through input** to forward the original text or object after updating State. With several wires, select one to forward or return the object keyed by wire name. Choose **State property** to return its current value, including a list, number, or null. Existing placements that return the whole State keep that output.
 
-For rolling context, declare a `Context` property with an empty string default. Connect the right port of API Response to a conversation-scoped State. Select a generation operation and enable **Include completed chat turn**. Its agent receives the current `state`, named wire `inputs`, prior `history`, and a separate `latestTurn` containing `user` and the selected `assistant` reply. Have the agent fold durable details from that pair into the prior Context and map the result back to the property. Chat returns the selected reply once the update succeeds. To use a property earlier in a flow, add a State read with the same key and scope.
+For rolling context, declare a `Context` property with an empty string default. Connect the right port of API Response to a conversation-scoped State. Select a generation operation and enable **Include completed chat turn**. Its agent receives the current `state`, named wire `inputs`, prior `history`, and a separate `latestTurn` containing `user` and the selected `assistant` reply. Have the agent fold durable details from that pair into the prior Context and map the result back to the property. Chat sends the selected reply first. The State update then runs under the same run ID, and a subsequent turn in that conversation waits for the update to finish. To use a property earlier in a flow, add a State read with the same key and scope.
 
 **This run** starts fresh each time. **This conversation** commits after a successful chat turn and is private to the signed-in user, Flow, library, and conversation. The chat page starts a new conversation on reset or reload. Debug and synchronous admin runs use temporary State. Custom chat clients using conversation State must send UUID headers `X-Lyra-Conversation-Id` and `X-Lyra-Turn-Id`. Keep the first stable across the conversation and reuse the second only when retrying the same request.
 
@@ -114,7 +114,7 @@ The editor previews selected library text and links to **PromptStudio** to creat
 
 Breadcrumbs show the context across admin pages. Use them or the Back and Forward controls to navigate. Unsaved forms and flow layouts, including wiring and canvas position, are restored from browser session storage in the current tab. Saved definitions and prompt versions persist in PostgreSQL.
 
-Every flow also includes a permanent **API Response**. Connect one Agent's right output port to its left input port to return its text or structured object as the response body. A successful run returns HTTP 200, with an empty body when API Response is unconnected. Failed runs return an error status. Existing browser drafts gain this response node automatically.
+Every flow also includes a permanent **API Response**. Connect one Agent's right output port to its left input port to return its text or structured object as the response body. Chat and the flow run endpoint send HTTP 200 when the reply is ready. An unconnected API Response produces an empty result. Failures before the reply produce an HTTP error. Follow the run ID to see downstream work and any later failures. Existing browser drafts gain this response node automatically.
 
 Choose **Switch** under **Item type** to route an input. Connect an Agent or JSON output to the Switch, then select **Add check** in its properties. Text fields support **is empty** and **is not empty**. Missing, null and whitespace-only text count as empty. Choice fields offer **equals** and **does not equal**, with values from the connected classifier, including choices copied through JSON mappings. A missing choice matches neither comparison.
 
@@ -187,18 +187,41 @@ The persisted `FlowSnapshot` contains the flow ID, name, revision, graph, and re
 
 Run evidence includes original messages, prompt text and model output. It persists in the local database until removed by an operator. Debug runs execute in the serving process. After a process interruption the available evidence remains inspectable.
 
+## System Flow Designer
+
+Open **Configuration → Agents → System Flow Designer → Open chat** and describe the change you want.
+For example, ask “Inspect the most recent failed run, read the prompt version that produced the failure,
+and draft a fix.” The chat shows the API calls and HTTP statuses for each completed turn.
+The designer uses the default chat model initially. Select a tool-capable Ollama, OpenAI Chat Completions
+or Claude model in its agent definition to change it. Its instructions are versioned in PromptStudio.
+Restarting Lyra preserves your model, instructions and other edits to the seeded definition.
+
+Designer chat and admin flow runs use the caller's delegated administrator access. The designer can read
+and publish prompts, change an agent's version pins, edit graph wiring, test agents and flows, inspect
+run events and linked AgentStudio traces, activate or disconnect a chat revision, and configure models,
+groups, protocols and providers. Configuration operations for personalities, memories and continuity
+use the same access checks as the UI. The designer can participate in admin flows. Global chat activation
+requires a flow without the System Flow Designer.
+
 ## Connect Codex to Lyra
 
 Use the Streamable HTTP endpoint `http://localhost:8765/mcp/design` for editing. It exposes the run inspectors plus these design tools.
 
 | Task | Tools |
 | --- | --- |
+| Discover configuration operations and their request schemas | `list_design_operations`, `describe_design_operation` |
+| Perform any listed operation with the same permissions and revision checks as the UI | `call_design_operation` |
 | Discover editable objects, pinned prompt versions and model choices | `get_catalog`, `list_flows`, `get_flow` |
-| Publish a prompt version | `publish_prompt` |
+| Read a prompt or publish a version | `read_prompt`, `publish_prompt` |
 | Create or revise an agent definition | `create_agent`, `update_agent` |
 | Create or revise a saved flow graph | `create_flow`, `update_flow` |
 | Test consecutive turns in a separate design conversation | `test_flow_turn`, `inspect_flow_run` |
 | Inspect or activate the chat binding | `get_chat_binding`, `activate_chat_flow` |
+
+For example, call `call_design_operation` with
+`{"call":{"operation":"GET /api/admin/prompts","query":{"name":"Instructions.flow-designer","version":1}}}`.
+The result includes the HTTP status and response data. To inspect an individual model trace, use
+`GET /api/admin/runs/{run_id}/traces/{trace_id}` with the ID from the run's `agent.trace` event.
 
 1. Obtain a delegated access token for Lyra’s backend using the full admin scope (`ENTRA_API_URI/ENTRA_ADMIN_SCOPE`) and an account with the admin role. The existing Lyra frontend registration is accepted. For a different token-issuing client, grant that client delegated access to the scope, add its application ID to `ENTRA_MCP_DESIGN_CLIENT_IDS` in Lyra’s `.env`, and restart Lyra. The inspector at `/mcp` has a separate client allowlist.
 2. Register the server once. The Codex configuration stores the environment variable name. [OpenAI Docs on Codex MCP commands](https://learn.chatgpt.com/docs/developer-commands#codex-mcp)
@@ -232,23 +255,23 @@ Try “Use Lyra to list my flows.” Then try “Duplicate the flow named Intake
 
 ### Long-term memory
 
-Set `LYRA_MEMORY_ENABLED=true` and supply `OPENAI_API_KEY` to enable memory for activated chat flows. The chat client must send `X-Lyra-Conversation-Id` and `X-Lyra-Turn-Id`. Capture runs on generating State elements with **Include chat turn** enabled and an incoming wire from API Response. It uses that State agent's selected provider and model for extraction. Built-in chat and admin/debug executions currently run without this memory integration.
+Add **Recall** to search the current user's saved memories. Connect a message, a classifier's search phrase, or another flow value to its query input. Connect its output to the **Memories** port of each Agent or generating State that needs those results. Several agents can share one search. Use separate Recall cards for independent queries. The **Include prior conversation State in search** option adds the turn's starting context to the embedding query.
 
-Flow View shows the running server's memory status above the canvas. Select API Input and use **Recall long-term memories** to control retrieval before agents answer. Select a generating State with **Include completed chat turn** and use **Save long-term memories** to control capture. Both controls default to enabled for existing designs and persist in saved and activated revisions. Node cards identify the two memory stages. In run history, API Input shows recalled memory contents, the State shows selected contents and evidence, and the completion event confirms the memory selections committed.
+Add **Remember** to capture facts. In Properties, choose the evidence source and extraction timing. **Connected value only** requires a quote in both the connected value and an actual user message. **Completed chat exchange** accepts API Response or a generating State that includes the completed turn. Choose the default chat model or the model from a saved agent. Extraction can run when evidence arrives or after API Response. Both settings stage writes until the turn succeeds.
+
+Set `LYRA_MEMORY_ENABLED=true` and supply `OPENAI_API_KEY` to enable these operations in activated chat. The chat client sends `X-Lyra-Conversation-Id` and `X-Lyra-Turn-Id`. Admin/debug runs can inspect wiring without accessing a user's memory store. Opening an older flow converts its API Input recall and enabled State capture into cards and wires. Save and reactivate it to apply edits to chat.
 
 Open **Memories** in the configuration sidebar to browse or search stored memories. Each memory shows its original evidence and links to the turns that created, reinforced or recalled it, including the input, conversation ID, turn ID and flow node. A run's **Memories associated with this turn** section links back to those memory records. Administrator views use the same library-wide permissions as run inspection. Chat APIs at `GET /api/memories`, `GET /api/memories/{id}` and `GET /api/memories/turns/{run_id}` restrict results to the authenticated owner. Lists and per-memory turn history support `offset` and `limit` pagination.
 
 The `memory_turns` relation records successful turns atomically with the conversation checkpoint. Deduplication preserves the original creation link and adds a reinforcement link for each later turn selecting the same content. Migration 6 restores creation links from existing source metadata and recall links from successful recorded events. Earlier reinforcement links were not retained and cannot be fully reconstructed.
 
-Before executing the flow, Lyra embeds the latest message together with the preceding conversation State and searches the authenticated user's memories across conversations and flows in the same library. It supplies up to eight retrieved memories to agent system prompts as historical data. Current user input takes priority. The query is bounded to 6,000 UTF-8 bytes, with the latest message first.
-
-After the response, extraction receives the same previous State, named inputs, history and selected latest turn as the context updater, plus recalled memories. It selects up to eight concise facts, preferences, decisions or goals and requires a verbatim evidence quote from a user message in the supplied turn/history. Memory rows, embedding rows, the conversation checkpoint and the successful run commit in one transaction. A failed extraction or embedding request fails the turn and can be retried. Replayed successful turn IDs return the original reply without another extraction. Identical normalized content is deduplicated within each owner and library. Corrections are retained as new statements with timestamps and provenance, with semantic consolidation left for a later revision.
+Each Recall search is bounded to 6,000 UTF-8 bytes and returns up to eight memories, with the query first. Run history identifies the card that recalled or extracted each memory. Remember selects up to eight facts, preferences, decisions or goals with supporting user quotes. Memory rows, embeddings, provenance links and updated conversation State commit together when the run finishes successfully. Once a reply is recorded, retrying the same conversation and turn IDs returns that reply, even while extraction is running or if it later fails. A request that failed before recording a reply can retry with the same IDs.
 
 `agent_studio.memories` holds text, evidence, type, source run/turn/node and timestamps, with a GIN full-text index. `agent_studio.memory_embeddings` references each memory UUID and records model, dimensions and full-precision pgvector data. Embeddings use OpenAI `text-embedding-3-large` with 3,072 dimensions. The separate embedding records preserve the information needed to export vectors to another backend. [OpenAI embedding guide](https://developers.openai.com/api/docs/guides/embeddings)
 
 Retrieval combines English full-text ranking and exact cosine similarity through reciprocal rank fusion. Semantic candidates must have cosine similarity greater than 0.35. Ownership and model identity are filtered before ranking. Exact vector search is the initial implementation and should be measured against corpus size and latency before adding ANN indexes or another vector service. One full-size embedding space serves both storage and recall. [pgvector search documentation](https://github.com/pgvector/pgvector#hybrid-search)
 
-`POST /api/memories/search` uses the same chat authentication and owner scope. Send `{"query":"preferred drinks","mode":"hybrid","limit":8}` for combined search or `{"query":"tea","mode":"text"}` for full-text search without an embedding call. Memory query context and selected memory text are sent to OpenAI for embedding. Extraction uses the context updater's configured provider. The run inspector records recalled IDs and extraction model calls.
+`POST /api/memories/search` uses the same chat authentication and owner scope. Send `{"query":"preferred drinks","mode":"hybrid","limit":8}` for combined search or `{"query":"tea","mode":"text"}` for full-text search without an embedding call. Memory query context and selected memory text are sent to OpenAI for embedding. Extraction uses the model selected on Remember. The run inspector records recalled IDs and extraction model calls.
 
 ### Request and response
 
@@ -285,8 +308,11 @@ goals and up to 24 curated memories. The supported placeholders are `{{name}}`, 
 personality section without calling a model. Template substitution is literal and does not execute
 Jinja code. Goals are guidance for the model, not scheduled tasks or a separate goal executor.
 
-Select the **Flow personality** card beside API Input, choose a profile in **Properties**, then save and activate the flow for chat. Agent nodes
-include it by default; clear **Use the flow's personality** for classifiers or other neutral agents.
+Add a **Personality** card in Flow View and choose a saved profile in **Properties**. Connect its output
+to the **Personality** port on each agent that should use it, or select the card in the agent’s
+**Personality connection** field. Each agent accepts one profile alongside its ordinary data input.
+Multiple cards may reference the same profile, and different agents may use different profiles.
+Save and activate the flow for chat. Opening an older flow converts its participating agents to visible connections.
 State updaters and memory extraction retain their own instructions. The run inspector records the
 resolved prompt and the profile revision, goals and memories used. The personality editor links to
 its latest 50 runs. Activate again using **Reactivate with latest personality and agents** after edits;

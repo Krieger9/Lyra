@@ -70,3 +70,5 @@ dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 #continuity-page pre { max-height: 480px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 #continuity-page > div > label { display: block; margin-top: 16px; }
 #continuity-page .configuration-form label { display: block; }
+#designer-chat { margin-bottom: 2rem; }
+#designer-chat [role="log"] p { white-space: pre-wrap; overflow-wrap: anywhere; }

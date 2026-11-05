@@ -8,16 +8,14 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 
 import agent_definitions
+from design_api import DesignCall, PromptLookup, call_design, describe, operations
 import flows
 import run_api
 from chat_input import ChatRequest
-from conversation_state import open_turn
-from flow_execution import perform
 from agent_store import AgentDefinition, AgentUpdate, PromptWrite
 from auth import require_design_access
-from flow_graph import FlowUpdate, FlowWrite, load_flow, serialize_flow, snapshot
+from flow_graph import FlowUpdate, FlowWrite, load_flow, serialize_flow
 from run_mcp import mount_mcp, register_run_tools
-from run_store import Run
 
 
 def install_design_mcp(app):
@@ -25,6 +23,21 @@ def install_design_mcp(app):
     read = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
     write = ToolAnnotations(readOnlyHint=False, openWorldHint=False)
     register_run_tools(app, server)
+
+    @server.tool(annotations=read)
+    def list_design_operations() -> list[str]:
+        """List all configuration workspace REST operations, including model and provider editing."""
+        return list(operations(app))
+
+    @server.tool(annotations=read)
+    def describe_design_operation(operation: str) -> dict[str, Any]:
+        """Read an operation's path parameters, query parameters and complete JSON body schema."""
+        return describe(app, operation)
+
+    @server.tool(annotations=write)
+    async def call_design_operation(ctx: Context, call: DesignCall) -> dict[str, Any]:
+        """Invoke a listed admin operation with your delegated access. Inspect its HTTP status and data."""
+        return await call_design(ctx.request_context.request, call)
 
     @server.tool(annotations=read)
     async def get_catalog() -> dict[str, Any]:
@@ -35,6 +48,14 @@ def install_design_mcp(app):
     async def publish_prompt(body: PromptWrite) -> dict[str, Any]:
         """Publish a new prompt version. Existing pinned agents keep their selected version."""
         return jsonable_encoder(await run_in_threadpool(agent_definitions.save_prompt, body, app.state.library))
+
+    @server.tool(annotations=read)
+    async def read_prompt(ctx: Context, name: str, version: int | None = None) -> dict[str, Any]:
+        """Read one prompt's exact text and publication version. Omit version for latest."""
+        result = await call_design(ctx.request_context.request, PromptLookup(name=name, version=version).as_call())
+        if result["status"] != 200:
+            raise ValueError(result["data"]["detail"])
+        return result["data"]
 
     @server.tool(annotations=write)
     async def create_agent(body: AgentDefinition) -> dict[str, Any]:
@@ -71,16 +92,8 @@ def install_design_mcp(app):
                              turn_id: UUID, chat: ChatRequest) -> dict[str, Any]:
         """Run a saved revision with real models in a private design-test conversation. Reuse its
         conversation_id across turns and its turn_id only for retries. Inspect the returned run for State."""
-        library = app.state.library
-        document = await run_in_threadpool(snapshot, library, flow_id, revision)
-        owner = ctx.request_context.request.state.design_owner + "/" + str(revision)
-        turn, replay = await run_in_threadpool(open_turn, library, owner, flow_id, conversation_id, turn_id, chat)
-        if replay:
-            return {"run_id": str(replay[0]), "reply": replay[1]}
-        run = Run(library, document, "debug")
-        value = chat.model_dump() if document.graph.chat_input else chat.message
-        reply = await perform(document, library, app.state.studio, value, run, chat, turn)
-        return {"run_id": str(run.id), "reply": reply}
+        body = run_api.DesignTurn(revision=revision, conversation_id=conversation_id, turn_id=turn_id, chat=chat)
+        return await run_api.test_turn(flow_id, body, ctx.request_context.request)
 
     @server.tool(annotations=read)
     async def get_chat_binding(ctx: Context) -> dict[str, Any]:

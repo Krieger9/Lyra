@@ -42,7 +42,8 @@ export async function mountPersonalities() {
     </details>
     <div class="configuration-actions"><button type="submit">Save personality</button><button type="button" id="preview-personality">Preview prompt</button></div>
     <p role="status"></p><pre id="personality-preview" hidden></pre>
-    <p>To use this profile, select it on the flow’s API Input, save the flow and activate it for chat.
+    <p>Add a Personality card to the flow, select this profile, and connect it to each agent that should use it.
+    Save the flow and activate it for chat.
     Reactivate after personality edits to load the new revision. State updaters keep their own instructions.</p>
   </form>`;
   const form = host.querySelector("form");

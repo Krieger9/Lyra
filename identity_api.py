@@ -6,7 +6,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from auth import bearer, settings
+from auth import admin_claims, bearer
 from identity import IdentityDocument, IdentitySession, Browse, Search
 from memory import no_store
 from memory_store import schema_name
@@ -16,7 +16,7 @@ from personalities import load_personality
 def require_identity_owner(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
     if credentials is None:
         raise HTTPException(401, "Sign in to inspect your continuity.")
-    claims = settings().authorized_claims(credentials.credentials, admin=True)
+    claims = admin_claims(request, credentials)
     request.state.identity_owner = claims["tid"] + "/" + claims["sub"]
 
 
@@ -140,9 +140,10 @@ async def reflect(personality_id: UUID, request: Request):
     from run_store import activation, Run
     current = session(request, personality_id)
     document = activation(current.library)
-    if not document or not document.personality or document.personality.id != personality_id:
+    if not document or personality_id not in document.profiles():
         raise HTTPException(422, "Activate a flow with this personality before starting a reflection cycle.")
-    nodes = [n for n in document.graph.nodes if n.type == "agent" and n.data.usePersonality and n.data.definition]
+    assignments = document.graph.agent_profile_ids
+    nodes = [n for n in document.graph.nodes if assignments.get(n.id) == personality_id and n.data.definition]
     if not nodes:
         raise HTTPException(422, "The active flow has no participating conversation agent.")
     definition = document.agent_definitions()[str(nodes[0].data.definition.id)]
@@ -158,7 +159,7 @@ async def reflect(personality_id: UUID, request: Request):
             "You may organize your library or reconsider priorities. There is no new encounter or external evidence."), "")
         if not completed:
             raise HTTPException(503, "Reflection could not finish within its budget. No changes were saved.")
-        run.finish("completed", result="Reflection cycle completed", identity=current)
+        run.finish("completed", result="Reflection cycle completed", identities=[current])
     except Exception:
         run.finish("failed", error="Reflection cycle failed.")
         raise

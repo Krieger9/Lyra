@@ -6,6 +6,16 @@ import { allowsConnection, graphDocument, hydrateGraph } from "../flow-editor/gr
 const snapshot = JSON.parse(readFileSync(new URL("./fixtures/router-snapshot.json", import.meta.url)));
 const catalog = Object.values(snapshot.agents);
 
+test("saving and reopening a moved layout preserves every node's coordinates by ID", () => {
+  const { nodes, wires } = hydrateGraph(snapshot.graph, catalog);
+  const moved = nodes.map((node, i) => ({ ...node, position: { x: -230.75 + i * 29, y: 415.5 - i * 91 } }));
+  const positions = items => Object.fromEntries(items.map(node => [node.id, node.position]));
+  const viewport = { x: -168, y: 302.5, zoom: 0.625 };
+  const saved = JSON.parse(JSON.stringify(graphDocument(moved, wires, viewport, snapshot.graph.panelSize)));
+  assert.deepEqual(positions(hydrateGraph(saved, catalog).nodes), positions(moved));
+  assert.deepEqual(saved.viewport, viewport);
+});
+
 test("State declarations and mapping settings round-trip and accept multiple inputs", () => {
   const state = { id: "context", type: "state", position: {x: 3, y: 4}, data: {label: "Context",
     stateDefinition: {scope: "conversation", key: "context", operation: "map", initial: {},
@@ -36,11 +46,11 @@ test("chat input and per-node history selection survive reopening a saved flow",
   const {nodes, wires} = hydrateGraph(graph, catalog);
   const saved = graphDocument(nodes, wires, graph.viewport, graph.panelSize);
   assert.equal(saved.nodes.find(n => n.type === "apiInput").data.chatInput, true);
-  assert.equal(saved.nodes.find(n => n.type === "apiInput").data.recallMemories, false);
+  assert.equal(saved.nodes.some(n => n.type === "recall"), false);
   assert.equal(saved.nodes.find(n => n.type === "apiInput").data.personalityId, undefined);
   const personality = nodes.find(n => n.type === "personality");
   assert.equal(personality.data.personalityId, "personality-1");
-  assert.equal(personality.deletable, false);
+  assert.equal(personality.deletable, true);
   assert.equal(allowsConnection(nodes, wires, {source: personality.id, target: "api-response"}), false);
   personality.position = {x: 35, y: 200};
   personality.data.personalityId = null;
@@ -49,8 +59,32 @@ test("chat input and per-node history selection survive reopening a saved flow",
   assert.equal(reopened.length, 1);
   assert.deepEqual(reopened[0].position, personality.position);
   assert.equal(reopened[0].data.personalityId, undefined);
-  assert.equal(saved.nodes.find(n => n.type === "agent").data.usePersonality, false);
+  assert.equal(wires.some(e => e.targetHandle === "personality"), false);
   assert.deepEqual(saved.nodes.find(n => n.type === "agent").data.inputSelection, {mode: "recent", turns: 3});
+});
+
+test("legacy opt-ins become profile wires and a saved disconnection stays disconnected", () => {
+  const graph = structuredClone(snapshot.graph);
+  const profile = {id: "voice", type: "personality", position: {x: 0, y: 200},
+    data: {label: "Writer voice", personalityId: "shared"}};
+  const agent = graph.nodes.find(n => n.type === "agent");
+  graph.nodes.push(profile, {...agent, id: "neutral", data: {...agent.data, usePersonality: false}});
+  const {nodes, wires} = hydrateGraph(graph, catalog);
+  const refs = wires.filter(e => e.targetHandle === "personality");
+  assert.deepEqual(refs.map(e => [e.source, e.target]), [["voice", agent.id]]);
+  nodes.push({...profile, id: "also-voice"});
+  assert.equal(allowsConnection(nodes, wires, {...refs[0], source: "also-voice"}), false);
+  assert.equal(allowsConnection(nodes, wires, {...refs[0], target: "neutral"}), true);
+  assert.equal(allowsConnection(nodes, wires, {...refs[0], source: "api-input", target: "neutral"}), false);
+  assert.equal(allowsConnection(nodes, wires, {...refs[0], targetHandle: null}), false);
+  const save = edges => graphDocument(nodes, edges, graph.viewport, graph.panelSize);
+  assert.deepEqual(hydrateGraph(save(wires), catalog).wires.filter(e => e.targetHandle)[0].id, refs[0].id);
+  const disconnected = hydrateGraph(save(wires.filter(e => !e.targetHandle)), catalog);
+  assert.equal(disconnected.nodes.filter(n => n.type === "personality").length, 2);
+  assert.equal(disconnected.wires.some(e => e.targetHandle), false);
+  const single = save(wires.filter(e => !e.targetHandle));
+  single.nodes = single.nodes.filter(n => n.id !== "also-voice");
+  assert.equal(hydrateGraph(single, catalog).wires.some(e => e.targetHandle), false);
 });
 
 test("reopen and save the captured router without losing wire IDs, ports or agent references", () => {
@@ -60,9 +94,14 @@ test("reopen and save the captured router without losing wire IDs, ports or agen
   assert.deepEqual(saved.nodes.find(n => n.type === "agent").data.definition, { id: catalog[0].id });
   assert.deepEqual(saved.nodes.find(n => n.type === "switch").data.switchDefinition,
     snapshot.graph.nodes.find(n => n.type === "switch").data.switchDefinition);
-  assert.deepEqual(saved.edges.map(e => [e.id, e.source, e.target, e.sourceHandle ?? null]),
+  const recall = nodes.find(n => n.type === "recall");
+  assert.ok(recall.data.includeQueryState);
+  assert.ok(saved.edges.some(e => e.source === "api-input" && e.target === recall.id));
+  assert.ok(saved.edges.some(e => e.source === recall.id && e.target === "agent" && e.targetHandle === "memories"));
+  const originalEdges = saved.edges.filter(e => e.source !== recall.id && e.target !== recall.id);
+  assert.deepEqual(originalEdges.map(e => [e.id, e.source, e.target, e.sourceHandle ?? null]),
     snapshot.graph.edges.map(e => [e.id, e.source, e.target, e.sourceHandle]));
-  assert.deepEqual(saved.edges.map(e => e.name), ["input1", "input1", "input1", "input2"]);
+  assert.deepEqual(originalEdges.map(e => e.name), ["input1", "input1", "input1", "input2"]);
   const reopened = hydrateGraph(saved, catalog);
   assert.deepEqual(save(reopened.nodes, reopened.wires), saved);
 });
@@ -74,4 +113,26 @@ test("switch wires require a valid port and only the wire being replaced is exem
   assert.equal(allowsConnection(nodes, wires, wire, wire.id), true);
   assert.equal(allowsConnection(nodes, wires, { ...wire, sourceHandle: "deleted" }, wire.id), false);
   assert.equal(allowsConnection(nodes, wires, { source: "agent", target: "switch" }), false);
+});
+
+test("legacy State capture migrates once and disconnected memory ports stay disconnected", () => {
+  const state = {id: "context", type: "state", position: {x: 3, y: 4}, data: {label: "Context",
+    stateDefinition: {operation: "generate", includeChatTurn: true, agentId: catalog[0].id}}};
+  const graph = {...snapshot.graph, nodes: [...snapshot.graph.nodes, state]};
+  const {nodes, wires} = hydrateGraph(graph, catalog);
+  const recall = nodes.find(n => n.type === "recall");
+  const remember = nodes.find(n => n.type === "remember");
+  assert.equal(remember.data.extractorAgentId, catalog[0].id);
+  assert.equal(remember.data.memoryEvidence, "exchange");
+  assert.ok(wires.some(e => e.source === state.id && e.target === remember.id));
+  const connection = {source: recall.id, target: state.id, targetHandle: "memories"};
+  const connected = wires.find(e => e.target === state.id && e.targetHandle === "memories");
+  assert.ok(connected);
+  assert.equal(allowsConnection(nodes, wires, connection), false);
+  const disconnected = wires.filter(e => e.id !== connected.id);
+  assert.equal(allowsConnection(nodes, disconnected, connection), true);
+  assert.equal(allowsConnection(nodes, disconnected, {...connection, source: "api-input"}), false);
+  const saved = graphDocument(nodes, disconnected, graph.viewport, graph.panelSize);
+  const reopened = hydrateGraph(saved, catalog);
+  assert.deepEqual(graphDocument(reopened.nodes, reopened.wires, graph.viewport, graph.panelSize), saved);
 });

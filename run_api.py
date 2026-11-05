@@ -4,13 +4,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app_context import library_for
+from agent_store import designer_id
 from auth import require_admin_access
-from flow_execution import plan_flow, run_in_background
+from chat_input import ChatRequest
+from conversation_state import open_turn
+from flow_execution import perform, plan_flow, run_in_background
 from flow_graph import FlowRun, snapshot
 from json_mapping import MappingError
-from run_store import Run, activate, activation, deactivate, inspect_run, recent
+from run_store import Run, activate, activation, deactivate, inspect_run, linked_trace, recent
 from memory import memory_enabled
 from memory_store import list_memories, memory_detail
 
@@ -46,12 +50,34 @@ class DebugRun(FlowRun, Revision):
     pass
 
 
+class DesignTurn(Revision):
+    conversation_id: UUID
+    turn_id: UUID
+    chat: ChatRequest
+
+
+@router.post("/flows/{flow_id}/test-turn")
+async def test_turn(flow_id: UUID, body: DesignTurn, request: Request):
+    """Test a saved revision in a private design conversation. Reuse the turn ID only for retries."""
+    library = library_for(request)
+    document = await run_in_threadpool(snapshot, library, flow_id, body.revision)
+    owner = request.state.design_owner + "/" + str(body.revision)
+    turn, replay = await run_in_threadpool(open_turn, library, owner, flow_id, body.conversation_id, body.turn_id, body.chat)
+    if replay:
+        return {"run_id": str(replay[0]), "reply": replay[1]}
+    run = Run(library, document, "debug")
+    value = body.chat.model_dump() if document.graph.chat_input else body.chat.message
+    reply = await perform(document, library, request.app.state.studio, value, run, body.chat, turn, design_request=request)
+    return {"run_id": str(run.id), "reply": reply}
+
+
 @router.post("/flows/{flow_id}/runs", status_code=202)
 async def start(flow_id: UUID, body: DebugRun, request: Request, background: BackgroundTasks):
     library = library_for(request)
     document = snapshot(library, flow_id, body.revision)
     run = Run(library, document, "debug")
-    background.add_task(run_in_background, document, library, request.app.state.studio, body.input, run, body.chatContext)
+    background.add_task(run_in_background, document, library, request.app.state.studio, body.input, run, body.chatContext,
+                        design_request=request)
     return {"id": str(run.id)}
 
 
@@ -66,6 +92,12 @@ def read_run(run_id: UUID, request: Request, after: int = Query(0, ge=0), limit:
     return inspect_run(library_for(request), run_id, after, limit, include_snapshot)
 
 
+@router.get("/runs/{run_id}/traces/{trace_id}")
+def read_trace(run_id: UUID, trace_id: UUID, request: Request):
+    """Read the AgentStudio trace identified by an agent.trace event in this run."""
+    return linked_trace(library_for(request), run_id, trace_id)
+
+
 @router.get("/chat-flow")
 def chat_binding(request: Request):
     doc = activation(library_for(request))
@@ -74,8 +106,10 @@ def chat_binding(request: Request):
 
 def binding_summary(document):
     result = document.model_dump(include={"id", "revision", "name"}, mode="json")
-    if document.personality:
-        result["personality"] = document.personality.model_dump(include={"id", "revision", "name"}, mode="json")
+    profiles = [p.model_dump(include={"id", "revision", "name"}, mode="json") for p in document.profiles().values()]
+    result["personalities"] = profiles
+    if len(profiles) == 1:
+        result["personality"] = profiles[0]
     return result
 
 
@@ -83,6 +117,8 @@ def binding_summary(document):
 def bind(flow_id: UUID, body: Revision, request: Request):
     library = library_for(request)
     document = snapshot(library, flow_id, body.revision)
+    if str(designer_id(library.name)) in document.agents:
+        raise HTTPException(422, "The System Flow Designer requires an admin run and cannot serve public chat.")
     try:
         _, incoming = plan_flow(document.graph, document.agent_definitions())
     except MappingError as exc:

@@ -43,8 +43,10 @@ function quantity(value: unknown, singular: string, plural: string) {
 export function eventLabel({ kind, data }: Entry): string {
   switch (kind) {
     case "personality.rendered": return `Personality · ${data.name} · revision ${data.revision}`;
-    case "memory.recalled": return `Recalled ${quantity(data.count ?? (data.ids as unknown[] | undefined)?.length ?? 0, "memory", "memories")}`;
-    case "memory.extracted": return `Selected ${quantity(data.count, "memory", "memories")} to save`;
+    case "memory.recalled": return data.enabled === false ? "Recall unavailable in this run" :
+      `Recalled ${quantity(data.count ?? (data.ids as unknown[] | undefined)?.length ?? 0, "memory", "memories")}`;
+    case "memory.extracted": return data.enabled === false ? "Remember unavailable in this run" :
+      `Selected ${quantity(data.count, "memory", "memories")} to save`;
     case "memory.committed": return `Committed ${quantity(data.count, "memory selection", "memory selections")}`;
     case "identity.context": return "Loaded identity context";
     case "identity.tool": return String(data.tool || "Identity tool");
@@ -54,6 +56,7 @@ export function eventLabel({ kind, data }: Entry): string {
     case "switch.selected": return `Selected path · ${data.label}`;
     case "node.started": return "Read inputs";
     case "node.completed": return "Node output";
+    case "response.ready": return "Reply ready for delivery";
     case "node.skipped": return "Skipped · inactive input path";
     case "run.failed": case "node.failed": case "mapping.failed": return `Failed · ${data.error ?? kind}`;
     case "run.interrupted": return "Run interrupted";

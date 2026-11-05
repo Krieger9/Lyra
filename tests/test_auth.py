@@ -155,6 +155,28 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             settings.cache_clear()
             self.assertEqual(settings().authorized_claims(token, admin=True, mcp=True, design=True)["azp"], client_id)
             self.assertEqual((await self.browser.post("/api/admin/prompts", headers=delegated)).status_code, 403)
+            from app import admin_home
+            from auth import require_admin_access
+            from design_mcp import install_design_mcp
+            from fastapi import Depends, FastAPI
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamable_http_client
+            self.library.name = "test-library"
+            self.studio.model.model.id = "test-model"
+            service = FastAPI()
+            service.state.library, service.state.studio = self.library, self.studio
+            service.get("/api/admin/home", dependencies=[Depends(require_admin_access)])(admin_home)
+            design_server = install_design_mcp(service)
+            client = httpx.AsyncClient(transport=httpx.ASGITransport(service), headers=delegated)
+            self.addAsyncCleanup(client.aclose)
+            async with design_server.session_manager.run(), streamable_http_client(
+                    "http://localhost:8765/mcp/design", http_client=client) as (reader, writer, _):
+                async with ClientSession(reader, writer) as session:
+                    await session.initialize()
+                    result = await session.call_tool("call_design_operation", {"call": {"operation": "GET /api/admin/home"}})
+                    self.assertEqual(result.structuredContent["data"]["prompt_library"], "test-library")
+                    denied = await session.call_tool("call_design_operation", {"call": {"operation": "POST /api/chat"}})
+                    self.assertTrue(denied.isError)
 
     async def test_missing_admin_config_leaves_chat_available(self):
         with patch.dict("os.environ", {"ENTRA_ADMIN_SCOPE": ""}):

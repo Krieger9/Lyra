@@ -1,8 +1,9 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
+import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
+import { useEffect, useState } from "react";
 import { sampleObject, type AgentDefinition } from "./catalog";
 import { fieldPaths } from "./json-mapping";
 import type { Rule } from "./bindings";
+import { MemoriesPort } from "./memory-cards";
 
 type StateDefinition = { key: string; scope: "run" | "conversation";
   operation: "read" | "update" | "replace" | "map" | "generate" | "generateObject";
@@ -48,13 +49,16 @@ export function StateObjectEditor({properties, change}: {
   </details>;
 }
 
-export function StateCard({data}: NodeProps<StateItem>) {
+export function StateCard({id, data}: NodeProps<StateItem>) {
   const def = data.stateDefinition;
+  const update = useUpdateNodeInternals();
+  useEffect(() => { update(id); }, [id, def.operation, update]);
   return <div className="item-card">
     <Handle type="target" position={Position.Left} className="flow-port" />
     <div><span className="item-kind">State · {def.scope}</span><strong>{data.label}</strong>
       <small>{def.operation} · {def.key}</small>
-      {def.includeChatTurn && (def.captureMemories ?? true) && <small>Save long-term memories</small>}</div>
+    </div>
+    {["generate", "generateObject"].includes(def.operation) && <MemoriesPort />}
     <Handle type="source" position={Position.Right} className="flow-port" />
   </div>;
 }
@@ -94,12 +98,6 @@ export function StateInspector({data, properties, ports, agents, change}: {data:
       <label><input type="checkbox" checked={def.includeChatTurn ?? false}
         onChange={e => update({includeChatTurn:e.target.checked})} />Include completed chat turn</label>
       <p>Connect API Response to this State. The agent receives prior history and the latest user message and assistant reply as a separate pair.</p>
-      {def.includeChatTurn && <>
-        <label><input type="checkbox" checked={def.captureMemories ?? true}
-          onChange={e => update({captureMemories:e.target.checked})} />Save long-term memories</label>
-        <p>After updating context, this agent selects facts and preferences from the same completed turn.
-          They are saved for future chats with this user. Inspect this node's run events to see the selected memories.</p>
-      </>}
     </>}
     {def.operation === "generate" && <label>Write result to<select value={def.property ?? ""} onChange={e => update({property:e.target.value})}>
       <option value="">Choose a State property…</option>{propertyOptions}

@@ -23,6 +23,33 @@ function adminUrl(value) {
 const relativeUrl = url => url.pathname + url.search;
 const storageKey = id => "lyra.adminDraft." + id;
 
+export async function prepareFlowView(accountId, loadChatFlow) {
+  const key = "lyra.lastFlowView." + accountId;
+  const url = new URL(location.href);
+  const explicit = ["id", "run", "draft", "new"].some(param => url.searchParams.has(param));
+  // The editor adds the draft ID on mount and the flow ID on the first Save.
+  window.addEventListener("pagehide", () => {
+    const params = new URLSearchParams(location.search);
+    const draft = params.get("draft");
+    if (!draft) return;
+    const last = new URLSearchParams({ draft });
+    if (params.has("id")) last.set("id", params.get("id"));
+    sessionStorage.setItem(key, last.toString());
+  });
+  if (explicit) return;
+  const previous = new URLSearchParams(sessionStorage.getItem(key) || "");
+  const draft = previous.get("draft");
+  if (draft && sessionStorage.getItem(storageKey(draft))) {
+    url.searchParams.set("draft", draft);
+    if (previous.has("id")) url.searchParams.set("id", previous.get("id"));
+  } else {
+    const binding = await loadChatFlow();
+    if (!binding) return;
+    url.searchParams.set("id", binding.id);
+  }
+  history.replaceState(history.state, "", relativeUrl(url));
+}
+
 export function draftSession() {
   const url = new URL(location.href);
   let id = url.searchParams.get("draft");

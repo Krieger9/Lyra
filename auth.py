@@ -117,10 +117,16 @@ def require_chat_access(request: Request, credentials: HTTPAuthorizationCredenti
     return claims["roles"]
 
 
-def require_admin_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+def admin_claims(request, credentials):
     if credentials is None:
         raise HTTPException(401, "Sign in to configure Lyra.", headers={"WWW-Authenticate": "Bearer"})
-    settings().authorize(credentials.credentials, admin=True)
+    design = request.scope.get("lyra.design_mcp", False)
+    return settings().authorized_claims(credentials.credentials, admin=True, mcp=design, design=design)
+
+
+def require_admin_access(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+    claims = admin_claims(request, credentials)
+    request.state.design_owner = "design/" + claims["tid"] + "/" + claims["sub"]
 
 
 def require_mcp_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
@@ -133,4 +139,5 @@ def require_design_access(request: Request, credentials: HTTPAuthorizationCreden
     if credentials is None:
         raise HTTPException(401, "An administrator access token is required.", headers={"WWW-Authenticate": "Bearer"})
     claims = settings().authorized_claims(credentials.credentials, admin=True, mcp=True, design=True)
+    request.scope["lyra.design_mcp"] = True
     request.state.design_owner = "design/" + claims["tid"] + "/" + claims["sub"]

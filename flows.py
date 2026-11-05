@@ -12,7 +12,7 @@ from app_context import library_for
 from auth import require_admin_access
 from flow_graph import FlowGraph, FlowWrite, FlowUpdate, FlowRun, flows, graph_agents, load_flow, serialize_flow, snapshot
 from flow_switch import FlowFields
-from flow_execution import perform
+from flow_execution import respond
 from json_mapping import MappingError, ObjectDefinition, assemble, check_size
 from run_store import Run
 
@@ -53,7 +53,7 @@ def switch_fields(node_id: str, graph: FlowGraph, request: Request):
     if node_id not in nodes or nodes[node_id].type != "switch":
         raise HTTPException(422, "Select a Switch in this flow.")
     incoming = {node.id: [] for node in graph.nodes}
-    for edge in graph.edges:
+    for edge in graph.data_edges:
         incoming[edge.target].append(edge)
     try:
         return FlowFields(nodes, incoming, graph_agents(library_for(request), graph), graph.stateObject).output(node_id)
@@ -69,6 +69,10 @@ def get_flow(flow_id: UUID, request: Request, response: Response):
 
 @router.post("", status_code=201)
 def create_flow(body: FlowWrite, library=Depends(library_for)):
+    """Create a saved draft. Each graph needs nodes with id/type api-input/apiInput and
+    api-response/apiResponse. Each node needs a position with x and y, and a data object.
+    To run a single agent, set its data.definition.id to a saved agent UUID and add two edges
+    with id, source and target linking api-input to the agent and the agent to api-response."""
     with library.storage.engine.begin() as connection:
         row = connection.execute(flows.insert().values(
             id=uuid4(), name=body.name, library=library.name, revision=1,
@@ -96,8 +100,12 @@ async def run_flow(flow_id: UUID, body: FlowRun, request: Request):
     run = Run(library, document, "api")
     headers = {"Cache-Control": "no-store", "X-Lyra-Run-Id": str(run.id)}
     try:
-        output = await perform(document, library, request.app.state.studio, body.input, run, body.chatContext)
+        def render(output):
+            if isinstance(output, str):
+                return Response(content=output, media_type="text/plain", headers=headers)
+            return JSONResponse(output, headers=headers)
+
+        return await respond(document, library, request.app.state.studio, body.input, run, body.chatContext,
+                             design_request=request, render_response=render)
     except HTTPException as exc:
         raise HTTPException(exc.status_code, exc.detail, headers=headers) from exc
-    return JSONResponse(output, headers=headers) if not isinstance(output, str) else Response(
-        content=output, media_type="text/plain", headers=headers)

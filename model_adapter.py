@@ -9,6 +9,21 @@ from fastapi import HTTPException
 
 
 class MeteredOllamaAdapter(OllamaAgentAdapter):
+    key = "ollama"
+    path = "api/chat"
+
+    async def request(self, path, payload, observe=None):
+        if observe:
+            observe("provider.request", provider=self.key, body=payload)
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(self.endpoint.uri.rstrip("/") + "/" + path, json=payload)
+        if not response.is_success:
+            raise HTTPException(502, f"Ollama tool request returned HTTP {response.status_code}. Choose a tool-capable model.")
+        result = response.json()
+        if observe:
+            observe("provider.response", provider=self.key, status=response.status_code, body=result)
+        return result
+
     async def complete_result(self, prompt, *, event_hooks=None):
         if isinstance(prompt, list):
             from agent_framework import Message

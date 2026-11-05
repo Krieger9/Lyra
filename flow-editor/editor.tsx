@@ -12,16 +12,19 @@ import { AgentOutput } from "./agent-output";
 import { SelectionEditor } from "./chat-input";
 import { RunView } from "./run-view";
 import { MemoryStatus } from "./memory-status";
-import { PersonalityCard, PersonalityPicker, PersonalityProvider } from "./personality";
+import { MemoriesPort, RecallCard, RememberCard, RememberProperties } from "./memory-cards";
+import { PersonalityCard, PersonalityConnection, PersonalityPicker, PersonalityProvider } from "./personality";
 import { SwitchCard, SwitchInspector, newSwitch } from "./switch";
 import { StateCard, StateInspector, StateObjectEditor, newState } from "./state";
 import { WireSettings } from "./wires";
-import { allowsConnection, graphDocument, hydrateGraph, nameExistingWires, nextWireName, ports, switchFieldGraph,
-  withEndpoints, type Agent, type ApiInput, type FlowItem, type GenericItem, type JsonItem, type PanelSize,
+import { allowsConnection, graphDocument, hydrateGraph, nextWireName, openGraph, ports, receivesMemories, switchFieldGraph,
+  type Agent, type ApiInput, type FlowItem, type GenericItem, type JsonItem, type PanelSize,
   type SavedGraph, type Wire } from "./graph";
 import { draftSession, linkWithReturn, renderBreadcrumbs } from "../static/admin/navigation.js";
 
 type FlowDraft = { items: FlowItem[]; edges: Wire[]; tool: string; nextNumber: number; viewport: Viewport; panelSize: PanelSize;
+  personalityMode?: "wired";
+  memoryMode?: "wired";
   stateObject?: Record<string, unknown>;
   flowId?: string; revision?: number; name?: string; lastSaved?: string };
 type FlowSummary = { id: string; name: string; revision: number };
@@ -61,8 +64,7 @@ function ApiInputCard({ data }: NodeProps<ApiInput>) {
         <path d="M14 4h5a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-5M3 12h12m-5-5 5 5-5 5" />
       </svg>
     </span>
-    <div><span className="item-kind">Flow start</span><strong>{data.label}</strong>
-      {(data.recallMemories ?? true) && <small>Recall long-term memories</small>}</div>
+    <div><span className="item-kind">Flow start</span><strong>{data.label}</strong></div>
     <Handle type="source" position={Position.Right} title="API Input output" className="flow-port" />
   </div>;
 }
@@ -71,6 +73,7 @@ function AgentCard({ data }: NodeProps<Agent>) {
   const error = agentConfigurationError(data.definition);
   return <div className={`item-card agent-card${error ? " invalid-agent" : ""}`}>
     <Handle type="target" position={Position.Left} title="Agent input" className="flow-port" />
+    <MemoriesPort />
     <span className="agent-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
         <path d="M12 4v3M3 12v4m18-4v4" /><rect x="5" y="7" width="14" height="13" rx="4" />
@@ -79,9 +82,11 @@ function AgentCard({ data }: NodeProps<Agent>) {
     </span>
     <div>
       <span className="item-kind">Agent</span><strong>{data.label}</strong>
+      <small className="personality-port-label">Personality ↓</small>
       {error && <span className="agent-validation" title={error}>⚠ Configuration required</span>}
     </div>
     <Handle type="source" position={Position.Right} title="Agent output" className="flow-port" />
+    <Handle type="target" id="personality" position={Position.Bottom} title="Personality input" className="flow-port personality-port" />
   </div>;
 }
 
@@ -98,9 +103,12 @@ function ApiResponseCard() {
   </div>;
 }
 
-const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, state: StateCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard, personality: PersonalityCard };
+const nodeTypes = { item: ItemCard, json: JsonCard, switch: SwitchCard, state: StateCard, apiInput: ApiInputCard, apiResponse: ApiResponseCard, agent: AgentCard, personality: PersonalityCard, recall: RecallCard, remember: RememberCard };
 const palette = [
   { type: "agent", title: "Agent" },
+  { type: "personality", title: "Personality" },
+  { type: "recall", title: "Recall" },
+  { type: "remember", title: "Remember" },
   { type: "json", title: "JSON" },
   { type: "switch", title: "Switch" },
   { type: "state", title: "State" },
@@ -111,8 +119,9 @@ const edgeOptions = { markerEnd: { type: MarkerType.ArrowClosed }, style: { stro
 function Editor() {
   const [draft] = useState(() => draftSession<FlowDraft>());
   const [stateObject, setStateObject] = useState(draft.data?.stateObject ?? {});
-  const [items, setItems, onNodesChange] = useNodesState<FlowItem>(withEndpoints(draft.data?.items));
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Wire>(nameExistingWires(draft.data?.edges ?? []));
+  const [initialGraph] = useState(() => openGraph(draft.data?.items, draft.data?.edges, draft.data?.personalityMode, draft.data?.memoryMode));
+  const [items, setItems, onNodesChange] = useNodesState<FlowItem>(initialGraph.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Wire>(initialGraph.wires);
   const { updateNodeData, deleteElements, fitView, getViewport, setViewport: setCanvasViewport } = useReactFlow<FlowItem>();
   const requestedFlow = new URLSearchParams(location.search).get("id") ?? undefined;
   const [flowId, setFlowId] = useState(draft.data?.flowId);
@@ -147,11 +156,13 @@ function Editor() {
     if (item.type === "switch") return ports(item.data).map(p => ({ source: item.id, sourceHandle: p.id as string | null,
       label: item.data.label + " · " + p.label }));
     if (item.type === "agent" || item.type === "json" || item.type === "state" || (selected?.type !== "apiResponse" && item.type === "apiInput")
-        || (item.type === "apiResponse" && selected?.type === "state"))
+        || (item.type === "apiResponse" && selected && ["state", "recall", "remember"].includes(selected.type!)))
       return [{ source: item.id, sourceHandle: null, label: item.data.label }];
     return [];
   });
-  const inputEdges = edges.filter(edge => edge.target === selected?.id);
+  const inputEdges = edges.filter(edge => edge.target === selected?.id && !edge.targetHandle);
+  const personalityEdge = edges.find(edge => edge.target === selected?.id && edge.targetHandle === "personality");
+  const memoriesEdge = edges.find(edge => edge.target === selected?.id && edge.targetHandle === "memories");
   const invalidBase = items.find(node => (node.type === "json" && node.data.baseError) ||
     (node.type === "state" && (node.data.initialError || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(node.data.stateDefinition.key))));
   const maximumPanelSize = stacked
@@ -189,11 +200,11 @@ function Editor() {
     return () => { live = false; };
   }, []);
   useEffect(() => {
-    draft.save({ items, edges, tool, nextNumber: nextNumber.current, viewport, panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
+    draft.save({ items, edges, personalityMode: "wired", memoryMode: "wired", tool, nextNumber: nextNumber.current, viewport, panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
   }, [draft, items, edges, tool, viewport, panelSize, flowId, revision, flowName, lastSaved, stateObject]);
   useEffect(() => {
     function saveBeforeLeaving() {
-      draft.save({ items, edges, tool, nextNumber: nextNumber.current, viewport: getViewport(), panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
+      draft.save({ items, edges, personalityMode: "wired", memoryMode: "wired", tool, nextNumber: nextNumber.current, viewport: getViewport(), panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
     }
     window.addEventListener("pagehide", saveBeforeLeaving);
     return () => window.removeEventListener("pagehide", saveBeforeLeaving);
@@ -307,7 +318,7 @@ function Editor() {
     if (node.type === "apiInput") return node.data.chatInput ? {message:"Hello", history:[{role:"user", content:"Earlier message"}]} : undefined;
     if (node.type === "json") return node.data.objectDefinition?.base;
     if (node.type === "agent" && node.data.definition?.outputSchema) return sampleObject(node.data.definition.outputSchema.fields);
-    const parents = edges.filter(edge => edge.target === id);
+    const parents = edges.filter(edge => edge.target === id && !edge.targetHandle);
     if (node.type === "switch" && parents.length) return sampleOutput(parents[0].source, next);
     if (node.type !== "state") return undefined;
     const def = node.data.stateDefinition;
@@ -325,7 +336,7 @@ function Editor() {
     if (!validConnection(connection)) return;
     setEdges(current => {
       const names = new Set(current.filter(edge => edge.target === connection.target).map(edge => edge.name ?? ""));
-      return addEdge<Wire>({ ...connection, id: crypto.randomUUID(), name: nextWireName(names) }, current);
+      return addEdge<Wire>({ ...connection, id: crypto.randomUUID(), name: connection.targetHandle ? null : nextWireName(names) }, current);
     });
     setItems(current => current.map(node => ({ ...node, selected: node.id === connection.target })));
   }
@@ -371,6 +382,10 @@ function Editor() {
     let item: FlowItem;
     if (entry.type === "agent") {
       item = { ...common, type: "agent", data: { label: "Unconfigured agent", definition: null } };
+    } else if (entry.type === "personality") {
+      item = { ...common, type: "personality", data: { label: `Personality ${nextNumber.current++}` } };
+    } else if (entry.type === "recall" || entry.type === "remember") {
+      item = { ...common, type: entry.type, data: { label: `${entry.title} ${nextNumber.current++}` } };
     } else if (entry.type === "json") {
       item = { ...common, type: "json", data: { label: `JSON ${nextNumber.current++}`, objectDefinition: { base: {}, mappings: [] } } };
     } else if (entry.type === "state") {
@@ -434,8 +449,9 @@ function Editor() {
         <ReactFlow<FlowItem> nodes={items} nodeTypes={nodeTypes} onNodesChange={onNodesChange}
           defaultViewport={draft.data?.viewport} onMoveEnd={(_, value) => setViewport(value)}
           edges={edges.map(edge => ({
-            ...edge, label: edge.name,
-            ariaLabel: `Connection ${edge.name} (${edge.id})`, labelStyle: { fontSize: 11, fill: "#40336f" },
+            ...edge, label: edge.targetHandle === "memories" ? "Memories" : edge.targetHandle === "personality" ? "Personality" : edge.name,
+            className: edge.targetHandle ? edge.targetHandle + "-wire" : undefined,
+            ariaLabel: `Connection ${edge.targetHandle || edge.name} (${edge.id})`, labelStyle: { fontSize: 11, fill: "#40336f" },
             labelBgStyle: { fill: "#f1edf8" }, labelBgBorderRadius: 4, labelBgPadding: [6, 4],
           }))} onEdgesChange={onEdgesChange} defaultEdgeOptions={edgeOptions}
           onEdgeClick={(_, edge) => {
@@ -501,30 +517,56 @@ function Editor() {
             <option value="chat">Chat request with history</option>
           </select></label>
           {selected.data.chatInput && <p>Outputs <code>message</code> and an ordered <code>history</code> of prior turns.</p>}
-          <label><input type="checkbox" checked={selected.data.recallMemories ?? true}
-            onChange={e => updateNodeData(selected.id, {recallMemories:e.target.checked})} />Recall long-term memories</label>
-          <p>Search saved memories using the latest message and prior context. Relevant facts are supplied to agents
-            before they answer, including in a new chat. Inspect API Input in run history to see the recalled memories.</p>
         </>}
-        {selected?.type === "personality" && <PersonalityPicker value={selected.data.personalityId}
-          change={personalityId => updateNodeData(selected.id, {personalityId})} />}
+        {selected?.type === "personality" && <>
+          <label>Card name<input value={selected.data.label} maxLength={120}
+            onChange={e => updateNodeData(selected.id, {label: e.target.value})}
+            onBlur={() => { if (!selected.data.label.trim()) updateNodeData(selected.id, {label: "Personality"}); }} /></label>
+          <PersonalityPicker value={selected.data.personalityId}
+            references={items.filter(n => n.type === "personality" && n.data.personalityId === selected.data.personalityId).length}
+            change={personalityId => updateNodeData(selected.id, {personalityId})} />
+        </>}
         {selected?.type === "apiResponse" && <>
           <strong>API Response</strong>
-          <p>Returns HTTP 200 on success, or an error status if the flow fails.</p>
+          <p>Sends the selected reply to the caller. Follow the run in Run history to see downstream work and any later failures.</p>
           <p>Connect one output, or outputs from mutually exclusive Switch paths. Exactly one connected output must be active per run. An unconnected response has an empty body.</p>
-          <p>Connect the right port to State to update memory with the selected reply before the turn commits.</p>
+          <p>Connect the right port to State or Remember to process the reply after delivery.</p>
         </>}
         {selectedEdge && <>
           <h3>Connection</h3>
-          {wireSettings(selectedEdge)}
+          {selectedEdge.targetHandle === "memories" ? <p>Supplies this Recall result to the connected agent.</p> :
+            selectedEdge.targetHandle === "personality" ? <p>Supplies the selected profile to this agent.</p> : wireSettings(selectedEdge)}
           <h3>From</h3><p>{items.find(node => node.id === selectedEdge.source)?.data.label}</p>
           <h3>To</h3><p>{items.find(node => node.id === selectedEdge.target)?.data.label}</p>
           <p>This ID is preserved when the flow is saved or the connection is rewired.</p>
         </>}
         {selected && selected.type !== "apiInput" && selected.type !== "personality" && <>
+          {receivesMemories(selected) && <label>Memories connection<select value={memoriesEdge?.source ?? ""}
+            onChange={e => {
+              const source = e.target.value;
+              if (!memoriesEdge) connect({source, target: selected.id, sourceHandle: null, targetHandle: "memories"});
+              else setEdges(current => source ? current.map(edge => edge.id === memoriesEdge.id ? {...edge, source} : edge) :
+                current.filter(edge => edge.id !== memoriesEdge.id));
+            }}>
+            <option value="">None</option>
+            {items.filter(n => n.type === "recall").map(n => <option key={n.id} value={n.id}>{n.data.label}</option>)}
+          </select></label>}
+          {selected.type === "recall" && <>
+            <p>Connect a message or search phrase as the query. Wire the results to the Memories port on each agent that needs them.</p>
+            <label><input type="checkbox" checked={selected.data.includeQueryState ?? false}
+              onChange={e => updateNodeData(selected.id, {includeQueryState: e.target.checked})} />Include prior conversation State in search</label>
+          </>}
+          {selected.type === "remember" && <RememberProperties data={selected.data} agents={catalog.agents}
+            change={patch => updateNodeData(selected.id, patch)} />}
           {selected.type === "agent" && <>
-            <label><input type="checkbox" checked={selected.data.usePersonality ?? true}
-              onChange={e => updateNodeData(selected.id, {usePersonality: e.target.checked})} />Use the flow’s personality</label>
+            <PersonalityConnection cards={items.filter(item => item.type === "personality")} value={personalityEdge?.source ?? ""}
+              change={source => {
+                if (!personalityEdge) {
+                  if (source) connect({ source, target: selected.id, sourceHandle: null, targetHandle: "personality" });
+                } else if (source) {
+                  setEdges(current => current.map(edge => edge.id === personalityEdge.id ? {...edge, source} : edge));
+                } else setEdges(current => current.filter(edge => edge.id !== personalityEdge.id));
+              }} />
             <label htmlFor="agent-definition">Defined agent</label>
             <select id="agent-definition" value={selected.data.definition?.id ?? ""} disabled={!catalogReady}
               onChange={event => {
@@ -555,7 +597,11 @@ function Editor() {
           </>}
           {selected.type === "state" && <StateInspector key={selected.id} data={selected.data} properties={stateObject}
             agents={catalog.agents} ports={inputEdges.map(edge => ({id:edge.id, name:edge.name!, base:sampleOutput(edge.source)}))}
-            change={patch => updateNodeData(selected.id, patch)} />}
+            change={patch => {
+              updateNodeData(selected.id, patch);
+              if (memoriesEdge && !receivesMemories({...selected, data: {...selected.data, ...patch}}))
+                setEdges(current => current.filter(edge => edge.id !== memoriesEdge.id));
+            }} />}
           {selected.type === "switch" && <SwitchInspector key={selected.id} node={selected}
             graphBody={JSON.stringify(switchFieldGraph(selected.id, items, edges, stateObject))}
             catalogVersion={JSON.stringify(catalog.agents.map(a => [a.id, a.revision]))}
@@ -593,7 +639,7 @@ function Editor() {
               selection={selected.data.inputSelection}
               editUrl={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}&focus=output`, { node: selected.id })} />
           </>}
-          <h3>Inputs</h3>
+          <h3>{selected.type === "recall" ? "Search query" : selected.type === "remember" ? "Evidence input" : "Inputs"}</h3>
           {selected.type !== "item" ? <>
             {inputEdges.length === 0 && <p>No input connected.</p>}
             {inputEdges.map((edge, index) => {
@@ -609,7 +655,7 @@ function Editor() {
                   onClick={() => setEdges(current => current.filter(other => other.id !== edge.id))}>Disconnect</button>
               </div>;
             })}
-            {(selected.type !== "switch" || inputEdges.length === 0) && <>
+            {(!["switch", "recall", "remember"].includes(selected.type!) || inputEdges.length === 0) && <>
             <label htmlFor="input-source">Add input</label>
             <select id="input-source" value="" onChange={event => {
               const [source, sourceHandle] = JSON.parse(event.target.value);

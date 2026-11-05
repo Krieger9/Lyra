@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from json_mapping import json_text
 from output_contract import OutputSchema
 from model_adapter import provider_model
+from agent_store import designer_id
 
 
 class AgentPrompts:
@@ -35,7 +36,7 @@ class AgentPrompts:
             bundle = self.identity.context(parameters.get("request", ""))
             system += "\n\n" + RUNTIME_INSTRUCTIONS + "\nPrivate continuity context:\n" + json_text(bundle)
             if self.observe:
-                self.observe("identity.context", bundle=bundle)
+                self.observe("identity.context", id=str(self.identity.personality.id), bundle=bundle)
         elif self.personality:
             from personalities import render_personality
             rendered = render_personality(self.personality)
@@ -86,7 +87,7 @@ class LinkedTrace:
 
 
 async def run_agent(library, studio, definition, value, observe=None, *, selection=None, chat_context=None,
-                    memories=None, personality=None, identity=None):
+                    memories=None, personality=None, identity=None, design_session=None):
     schema = OutputSchema.model_validate(definition["outputSchema"]) if definition["outputSchema"] else None
     history = None
     parameters = None
@@ -100,7 +101,14 @@ async def run_agent(library, studio, definition, value, observe=None, *, selecti
         model = provider_model(definition["endpoint"], model_selection["model"])
     else:
         model = studio.model
-    if identity:
+    if str(definition.get("id")) == str(designer_id(library.name)):
+        from design_session import design_specs
+        from tool_runtime import ToolModel
+        if design_session is None or design_session.request.scope.get("lyra.system_agent_call"):
+            raise HTTPException(403, "Run the System Flow Designer directly from an administrator session.")
+        model = ToolModel(model, design_session, observe, rounds=17, specs=design_specs())
+        history = history or []  # Keep the system instructions separate from user input and tool results.
+    elif identity:
         from tool_runtime import ToolModel
         identity.reflection_model = model
         model = ToolModel(model, identity, observe)

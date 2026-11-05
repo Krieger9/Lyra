@@ -16,6 +16,8 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from agent_output import AgentPrompts
 from agent_store import metadata
 from chat_input import ChatRequest
+from flow_graph import FlowGraph
+from flow_execution import execute
 from memory import MemorySession, embed
 from memory_store import (EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, save_memories, search_memories,
                           memory_detail, list_memories, memories_for_run, record_recalls)
@@ -31,6 +33,54 @@ def vector(axis=0):
 
 
 class MemoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scoped_recall_and_remember_timing(self):
+        agent_id = str(uuid4())
+        def node(key, kind, **data):
+            return {"id": key, "type": kind, "position": {"x": 0, "y": 0}, "data": data}
+        nodes = [node("api-input", "apiInput"), node("api-response", "apiResponse"),
+                 node("lookup", "recall"), node("save", "remember"),
+                 node("route", "switch", switchDefinition={"paths": [{"id": "active", "label": "Has text",
+                      "checks": [{"field": "", "operator": "notEmpty"}]}]})]
+        nodes.extend(node(key, "agent", definition={"id": agent_id}) for key in ("neutral", "writer"))
+        edges = [{"id": str(i), "source": s, "target": t} for i, (s,t) in enumerate([
+            ("api-input", "route"), ("api-input", "neutral"), ("neutral", "writer"), ("writer", "api-response")])]
+        edges += [{"id": "query", "source": "route", "sourceHandle": "active", "target": "lookup"},
+                  {"id": "facts", "source": "lookup", "target": "writer", "targetHandle": "memories"},
+                  {"id": "evidence", "source": "route", "sourceHandle": "active", "target": "save"}]
+        graph = FlowGraph(nodes=nodes, edges=edges)
+        for text, timing in [("I prefer tea", "afterResponse"), ("I prefer tea", "onEvidence"), ("", "onEvidence")]:
+            graph.nodes[3].data.rememberWhen = timing
+            record = Mock()
+            completed = []
+            record.emit.side_effect = lambda kind, **data: completed.append(record.node) if kind == "node.completed" else None
+            facts = [{"id": "tea", "content": "Likes tea"}]
+            memory = Mock(search=AsyncMock(return_value=facts), capture=AsyncMock(), pending=[])
+            model = AsyncMock(side_effect=["neutral data", "reply"])
+            with patch("flow_execution.run_agent", model):
+                reply = await execute(graph, {agent_id: {}}, None, Mock(), text, record, ChatRequest(message="I prefer tea"), memory=memory)
+            self.assertEqual(reply, "reply")
+            self.assertEqual(model.await_args_list[0].kwargs["memories"], [])
+            self.assertEqual(model.await_args_list[1].kwargs["memories"], facts if text else [])
+            self.assertEqual(model.await_args_list[1].args[3], "neutral data")
+            if text:
+                memory.search.assert_awaited_once_with(text, None, "lookup")
+                self.assertEqual(memory.capture.await_args.args[0], {"evidence": text})
+                self.assertEqual(completed.index("save") < completed.index("api-response"), timing == "onEvidence")
+            else:
+                memory.search.assert_not_awaited()
+                memory.capture.assert_not_awaited()
+
+    async def test_wire_capture_requires_selected_evidence_and_authentic_user_text(self):
+        session = MemorySession(None, "owner", uuid4(), uuid4())
+        facts = ["I prefer tea", "I own a cat", "I live in Paris"]
+        model = AsyncMock()
+        model.complete.return_value = json.dumps({"memories": [
+            {"content": fact, "kind": "fact", "evidence": fact} for fact in facts]})
+        with patch("memory.embed", new=AsyncMock(return_value=[vector()])):
+            await session.capture({"evidence": {"selected": [facts[0], facts[2]]}}, model, "save",
+                                  ChatRequest(message="I prefer tea and I own a cat"))
+        self.assertEqual([entry["content"] for entry in session.pending], [facts[0]])
+
     async def test_embedding_request_order_and_validation(self):
         result = {"model": EMBEDDING_MODEL, "data": [
             {"index": 1, "embedding": vector(1)}, {"index": 0, "embedding": vector()}]}

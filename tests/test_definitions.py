@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -15,9 +16,10 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from agent_store import definitions, metadata, seed_defaults
+from agent_store import definitions, metadata, seed_defaults, seed_designer
 from schema_migrations import apply_migrations, schema_transaction
 from app import app
+from conversation_state import open_turn
 from auth import require_admin_access, require_chat_access, require_design_access, require_mcp_access
 
 
@@ -258,7 +260,8 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             graph["nodes"].append({"id": "voice", "type": "agent", "position": {"x": 400, "y": 100},
                                    "data": {"definition": {"id": agent["id"]}}})
             graph["edges"] = [{"id": "in", "source": "api-input", "target": "voice"},
-                              {"id": "out", "source": "voice", "target": "api-response"}]
+                              {"id": "out", "source": "voice", "target": "api-response"},
+                              {"id": "profile", "source": "persona", "target": "voice", "targetHandle": "personality"}]
             flow = (await self.client.post("/api/admin/flows", json={"name": "Persona flow", "graph": graph})).json()
             binding = "/api/admin/chat-flow/" + flow["id"]
             activated = await self.client.put(binding, json={"revision": 1})
@@ -275,7 +278,7 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("curious voice", prompt)
             self.assertIn("Lyra enjoys astronomy", prompt)
             run = (await self.client.get("/api/admin/runs/" + chat.headers["X-Lyra-Run-Id"])).json()
-            self.assertEqual(run["snapshot"]["personality"]["revision"], 1)
+            self.assertEqual(run["snapshot"]["personalities"][profile["id"]]["revision"], 1)
             event = next(e for e in run["events"] if e["kind"] == "personality.rendered")
             self.assertEqual(event["data"]["memories"][0]["id"], profile["memories"][0]["id"])
             history = (await self.client.get("/api/admin/personalities/" + profile["id"] + "/runs")).json()
@@ -285,7 +288,7 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post("/api/chat", json={"message": "Hello again"})
             self.assertIn("formal voice", model.complete.await_args.args[0])
             self.assertNotIn("astronomy", model.complete.await_args.args[0])
-        graph["nodes"][-1]["data"]["usePersonality"] = False
+        graph["edges"].pop()
         await self.client.put("/api/admin/flows/" + flow["id"], json={"name": flow["name"], "revision": 1, "graph": graph})
         result = await self.client.post("/api/admin/flows/" + flow["id"] + "/run", json={"input": "Neutral"})
         self.assertEqual(result.status_code, 200, result.text)
@@ -338,7 +341,7 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             from json_mapping import MappingError
             with patch("conversation_state.ConversationTurn.commit", side_effect=MappingError("State too large")):
                 failed = await send("uncommitted")
-                self.assertEqual(failed.status_code, 422)
+                self.assertEqual(failed.status_code, 200)
                 failed_run = await self.client.get("/api/admin/runs/" + failed.headers["X-Lyra-Run-Id"])
                 self.assertEqual(failed_run.json()["status"], "failed")
             self.assertEqual((await send("third")).json()["reply"]["previous"], "second")
@@ -364,15 +367,46 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.put("/api/admin/chat-flow/" + flow, json={"revision": 1})).status_code, 200)
         def authenticate(request: Request):
             request.state.chat_owner = "test owner"
-        model = AsyncMock(side_effect=['{"Context":"old"}', '{"wrong":"bad"}', '{"Context":"new"}'])
+        updating, release, waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        loop = asyncio.get_running_loop()
+        results = ['{"Context":"old"}', '{"wrong":"bad"}', '{"Context":"new"}']
+
+        async def update(*args):
+            if len(results) == 3:
+                updating.set()
+                await release.wait()
+            return results.pop(0)
+
+        def observe_turn(*args, **kwargs):
+            result = open_turn(*args, **kwargs)
+            if result == (None, None):
+                loop.call_soon_threadsafe(waiting.set)
+            return result
+
+        model = AsyncMock(side_effect=update)
         app.state.studio.model, app.state.studio.traces = SimpleNamespace(complete=model), Mock()
         headers = {"X-Lyra-Conversation-Id": str(uuid4()), "X-Lyra-Turn-Id": str(uuid4())}
         with patch.dict(app.dependency_overrides, {require_chat_access: authenticate}):
-            first = await self.client.post("/api/chat", json={"message": "first"}, headers=headers)
-            self.assertEqual(first.json(), {"reply": {"answer": "public reply"}})
-            headers["X-Lyra-Turn-Id"] = str(uuid4())
             body = {"message": "correction", "history": [{"role": "user", "content": "first"}]}
-            self.assertEqual((await self.client.post("/api/chat", json=body, headers=headers)).status_code, 502)
+            first_request = asyncio.create_task(self.client.post("/api/chat", json={"message": "first"}, headers=dict(headers)))
+            try:
+                await asyncio.wait_for(updating.wait(), 5)
+                headers["X-Lyra-Turn-Id"] = str(uuid4())
+                with patch("conversation_state.open_turn", side_effect=observe_turn):
+                    second_request = asyncio.create_task(self.client.post("/api/chat", json=body, headers=headers))
+                    await asyncio.wait_for(waiting.wait(), 5)
+                    self.assertEqual(model.await_count, 1)
+            finally:
+                release.set()
+                first = await first_request
+            sent = await second_request
+            self.assertEqual(first.json(), {"reply": {"answer": "public reply"}})
+            self.assertEqual(sent.status_code, 200)
+            failed = (await self.client.get("/api/admin/runs/" + sent.headers["X-Lyra-Run-Id"])).json()
+            self.assertEqual((failed["status"], failed["result"]), ("failed", first.json()["reply"]))
+            repeated = await self.client.post("/api/chat", json=body, headers=headers)
+            self.assertEqual(repeated.headers["X-Lyra-Run-Id"], sent.headers["X-Lyra-Run-Id"])
+            headers["X-Lyra-Turn-Id"] = str(uuid4())
             success = await self.client.post("/api/chat", json=body, headers=headers)
             self.assertEqual(success.json(), first.json())
             replay = await self.client.post("/api/chat", json=body, headers=headers)
@@ -424,6 +458,15 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                  "property": "Context", "agentId": updater["id"], "includeChatTurn": True}}}]
         graph["edges"] = [{"id": key, "source": source, "target": target} for key, source, target in [
             ("in", "api-input", "answer"), ("out", "answer", "api-response"), ("after", "api-response", "update")]]
+        graph["nodes"] += [
+            {"id": "lookup", "type": "recall", "position": {"x": 1, "y": 2}, "data": {"includeQueryState": True}},
+            {"id": "store", "type": "remember", "position": {"x": 2, "y": 2},
+             "data": {"memoryEvidence": "exchange", "extractorAgentId": updater["id"]}}]
+        graph["edges"] += [
+            {"id": "query", "source": "api-input", "target": "lookup"},
+            {"id": "answer-facts", "source": "lookup", "target": "answer", "targetHandle": "memories"},
+            {"id": "state-facts", "source": "lookup", "target": "update", "targetHandle": "memories"},
+            {"id": "evidence", "source": "update", "target": "store"}]
         saved = await self.client.post("/api/admin/flows", json={"name": "Memories", "graph": graph})
         self.assertEqual(saved.status_code, 201, saved.text)
         flow = saved.json()["id"]
@@ -452,10 +495,14 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                 patch("memory.embed", new=AsyncMock(side_effect=lambda texts: [embedding for _ in texts])) as embed:
             with patch("memory.save_memories", side_effect=fail_after_write):
                 failed = await self.client.post("/api/chat", json=body, headers=headers)
-            self.assertEqual(failed.status_code, 503, failed.text)
+            self.assertEqual(failed.status_code, 200, failed.text)
+            record = (await self.client.get("/api/admin/runs/" + failed.headers["X-Lyra-Run-Id"])).json()
+            self.assertEqual((record["status"], record["result"]), ("failed", "reply"))
             with self.storage.engine.connect() as conn:
-                for table in ("memories", "memory_embeddings", "memory_turns", "flow_state_turns"):
+                for table in ("memories", "memory_embeddings", "memory_turns"):
                     self.assertEqual(conn.execute(text(f"SELECT count(*) FROM {self.schema}.{table}")).scalar(), 0)
+                self.assertEqual(conn.execute(text(f"SELECT objects FROM {self.schema}.flow_state_turns")).scalar_one(), {})
+            headers["X-Lyra-Turn-Id"] = str(uuid4())
             model.side_effect = ["reply", "context", extraction]
             first = await self.client.post("/api/chat", json=body, headers=headers)
             self.assertEqual(first.status_code, 200, first.text)
@@ -472,6 +519,7 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(detail.json()["turns"][0]["turn_id"], headers["X-Lyra-Turn-Id"])
             related = await self.client.get("/api/memories/turns/" + first.headers["X-Lyra-Run-Id"])
             self.assertEqual(related.json()["memories"][0]["id"], memory_id)
+            self.assertEqual(related.json()["memories"][0]["node"], "store")
             inspected = await self.client.get("/api/admin/runs/" + first.headers["X-Lyra-Run-Id"])
             self.assertEqual(inspected.json()["memories"][0]["relation"], "created")
             # Recall crosses conversations for the same owner.
@@ -479,6 +527,8 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             model.side_effect = ["tea", "new context", '{"memories":[]}']
             second = await self.client.post("/api/chat", json={"message": "Which drink?"}, headers=headers)
             self.assertEqual(second.status_code, 200, second.text)
+            related = await self.client.get("/api/memories/turns/" + second.headers["X-Lyra-Run-Id"])
+            self.assertEqual([(m["relation"], m["node"]) for m in related.json()["memories"]], [("recalled", "lookup")])
             answer_prompt = model.await_args_list[-3].args[0]
             self.assertIn("User prefers tea", answer_prompt)
             updater_payload = json.loads(model.await_args_list[-1].args[0][1]["content"])
@@ -779,13 +829,15 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                     listing = await session.list_tools()
                     self.assertIn("update_flow", {tool.name for tool in listing.tools})
 
-                    async def call(name, **arguments):
-                        reply = await session.call_tool(name, arguments)
+                    async def call(tool_name, **arguments):
+                        reply = await session.call_tool(tool_name, arguments)
                         self.assertFalse(reply.isError, reply.content)
                         return reply.structuredContent
 
                     prompt = await call("publish_prompt", body={"name": "request", "text": "Updated"})
                     self.assertEqual(prompt["version"], 2)
+                    self.assertEqual(await call("read_prompt", name="request"), prompt)
+                    self.assertEqual((await call("read_prompt", name="request", version=1))["text"], "{{ request }}")
                     agent = await call("create_agent", body=self.body)
                     edit = self.body | {"name": "Reviewer", "revision": 1, "prompt": {"name": "request", "version": 2}}
                     await call("update_agent", agent_id=agent["id"], body=edit)
@@ -804,6 +856,67 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await call("list_flows"))["result"][0]["name"], "Edited")
                     self.assertEqual(await call("get_flow", flow_id=flow["id"]), updated)
                     self.assertEqual((await self.client.get("/api/admin/flows/" + flow["id"])).json(), updated)
+
+                    available = (await call("list_design_operations"))["result"]
+                    self.assertIn("POST /api/admin/models", available)
+                    schema = await call("describe_design_operation", operation="POST /api/admin/flows")
+                    self.assertIn("FlowGraph", schema["components"]["schemas"])
+                    model = await call("call_design_operation", call={
+                        "operation": "POST /api/admin/models", "body": {"name": "mcp-test-model"}})
+                    self.assertEqual(model["status"], 201)
+                    self.assertIn(model["data"], (await self.client.get("/api/admin/catalog")).json()["models"])
+
+    async def test_system_designer_runs_as_admin_and_preserves_edited_definition(self):
+        from agent_studio.postgres_tracing import PostgresTraceAdapter, traces
+        from agent_output import run_agent
+        from fastapi import HTTPException
+
+        seed_designer(self.library)
+        agents = (await self.client.get("/api/admin/catalog")).json()["agents"]
+        designer, = [a for a in agents if a.get("systemAgent") == "flow-designer"]
+        url = "/api/admin/agents/" + designer["id"]
+        edited = (await self.client.put(url, json=designer | {"name": "My designer"})).json()
+        seed_designer(self.library)
+        self.assertEqual((await self.client.get("/api/admin/catalog")).json()["agents"], [edited])
+
+        calls = []
+        async def model_request(path, payload, observe):
+            calls.append(path)
+            if len(calls) == 1:
+                return {"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {
+                    "name": "call_design_operation", "arguments": {"operation": "POST /api/admin/prompts",
+                    "body": {"name": "design-test", "text": "A test prompt"}}}}]}}
+            result = json.loads(payload["messages"][-1]["content"])
+            self.assertEqual(result["status"], 201)
+            return {"message": {"role": "assistant", "content": "Published version 1."}}
+
+        app.state.studio.model = SimpleNamespace(key="ollama", path="api/chat", model=SimpleNamespace(id="test"),
+                                                 request=model_request)
+        traces.create(self.storage.engine)
+        app.state.studio.traces = PostgresTraceAdapter(self.storage.engine)
+        result = await self.client.post(url + "/test", json={"input": "Publish the test prompt."})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["operations"], [{"operation": "POST /api/admin/prompts", "path": {}, "status": 201}])
+        self.assertEqual((await self.client.get("/api/admin/prompts?name=design-test")).json()["text"], "A test prompt")
+        with self.assertRaises(HTTPException) as denied:
+            await run_agent(self.library, app.state.studio, edited, "ordinary chat")
+        self.assertEqual(denied.exception.status_code, 403)
+
+        graph = self.flow_graph()
+        graph["nodes"].append({"id": "designer", "type": "agent", "position": {"x": 1, "y": 2},
+                               "data": {"definition": {"id": designer["id"]}}})
+        graph["edges"] = [{"id": "in", "source": "api-input", "target": "designer"},
+                          {"id": "out", "source": "designer", "target": "api-response"}]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Admin flow", "graph": graph})).json()
+        self.assertEqual((await self.client.put("/api/admin/chat-flow/" + flow["id"], json={"revision": 1})).status_code, 422)
+        calls.clear()
+        response = await self.client.post("/api/admin/flows/" + flow["id"] + "/run", json={"input": "Publish again."})
+        self.assertEqual(response.status_code, 200, response.text)
+        run_url = "/api/admin/runs/" + response.headers["x-lyra-run-id"]
+        events = (await self.client.get(run_url)).json()["events"]
+        trace = next(e["data"]["traceId"] for e in events if e["kind"] == "agent.trace")
+        self.assertEqual((await self.client.get(run_url + "/traces/" + trace)).json()["agent_output"], response.text)
+        self.assertEqual((await self.client.get("/api/admin/runs/" + str(uuid4()) + "/traces/" + trace)).status_code, 404)
 
     async def test_flow_response_returns_exact_agent_output_and_errors(self):
         agent = (await self.client.post("/api/admin/agents", json={"name": "Raw agent"})).json()

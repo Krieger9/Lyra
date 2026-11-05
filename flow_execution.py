@@ -4,12 +4,14 @@ import logging
 from time import perf_counter
 
 from fastapi import HTTPException
+from starlette.responses import Response
 
 from agent_output import ObservedModel, run_agent
+from design_session import DesignSession
 from chat_input import ChatRequest
 from flow_graph import FlowSnapshot, path_requirements
 from flow_switch import FlowFields
-from json_mapping import MappingError, assemble, validate_mappings
+from json_mapping import MappingError, assemble, json_text, validate_mappings
 from run_store import RUN_TIMEOUT
 from model_adapter import provider_model
 
@@ -18,7 +20,7 @@ def plan_flow(graph, agents, observe=None):
     nodes = {node.id: node for node in graph.nodes}
     incoming = {node.id: [] for node in graph.nodes}
     outgoing = {node.id: [] for node in graph.nodes}
-    for edge in graph.edges:
+    for edge in graph.data_edges:
         incoming[edge.target].append(edge)
         outgoing[edge.source].append(edge.target)
     reached = {"api-input"}
@@ -35,6 +37,7 @@ def plan_flow(graph, agents, observe=None):
     required_paths = {"api-input": {}}
     ancestors = {"api-input": set()}
     state_accesses = {}
+    memory_sources = graph.memory_sources
 
     def visit(node_id):
         if observe:
@@ -46,6 +49,19 @@ def plan_flow(graph, agents, observe=None):
         visiting.add(node_id)
         node = nodes[node_id]
         parents = incoming[node_id]
+        if node.type in ("recall", "remember") and len(parents) != 1:
+            raise MappingError(f"{node.type.title()} requires exactly one input.")
+        if node.type == "remember":
+            if node.data.extractorAgentId and str(node.data.extractorAgentId) not in agents:
+                raise MappingError("The Remember extractor agent is unavailable.")
+            source = nodes[parents[0].source]
+            if node.data.memoryEvidence == "exchange" and not (source.type == "apiResponse" or
+                    source.type == "state" and source.data.stateDefinition.includeChatTurn):
+                raise MappingError("For completed exchange evidence, connect API Response or a State that includes the completed turn.")
+            if node.data.rememberWhen == "afterResponse":
+                visit("api-response")
+        if node_id in memory_sources:
+            visit(memory_sources[node_id])
         if node.type == "json":
             if node.data.objectDefinition is None:
                 raise HTTPException(422, "JSON node needs an object definition.")
@@ -81,32 +97,51 @@ def plan_flow(graph, agents, observe=None):
                 if (definition.operation, previous.operation) != ("read", "read") or definition.initial != previous.initial:
                     raise HTTPException(422, f"Connect the State accesses for '{definition.key}' in execution order.")
             accesses.append(node)
-        if node.type in ("agent", "json", "switch", "state", "apiResponse"):
+        if node.type in ("agent", "json", "switch", "state", "apiResponse", "recall", "remember"):
             plan.append(node)
         visiting.remove(node_id)
         completed.add(node_id)
 
     for node in graph.nodes:
-        if node.id in reached and node.id != "api-response":
+        if node.id in reached and node.type == "remember" and node.data.rememberWhen == "onEvidence":
             visit(node.id)
     visit("api-response")
+    for node in graph.nodes:
+        if node.id in reached and node.id != "api-response":
+            visit(node.id)
     return plan, incoming
 
 
-async def execute(graph, agents, library, studio, value, run, chat_context=None, conversation_state=None,
-                  memory=None, personality=None, identity=None):
+async def extract_memories(memory, payload, agent, studio, run, node_id, chat=None):
+    selection = agent.get("modelSelection")
+    model = provider_model(agent["endpoint"], selection["model"]) if selection else studio.model
+    before = len(memory.pending)
+    await memory.capture(payload, ObservedModel(model, run.emit), node_id, chat)
+    selected = memory.pending[before:]
+    run.emit("memory.extracted", count=len(selected),
+             memories=[{key: item[key] for key in ("content", "kind", "evidence")} for item in selected])
+    return len(selected)
+
+
+async def execution_steps(graph, agents, library, studio, value, run, chat_context=None, conversation_state=None,
+                          memory=None, profiles=None, identities=None, design_session=None):
     plan, incoming = plan_flow(graph, agents, run)
+    profile_ids = graph.agent_profile_ids
+    memory_sources = graph.memory_sources
+    legacy_memory = graph.memoryMode == "legacy"
+    exchange_payloads = {}
     state = {"run": {}, "conversation": conversation_state if conversation_state is not None else {}}
     run.node = None
     run.emit("plan.ready", order=["api-input", *[n.id for n in plan]])
     input_node = next(node for node in graph.nodes if node.id == "api-input")
-    if memory and input_node.data.recallMemories:
+    if memory and legacy_memory and input_node.data.recallMemories:
         run.node = "api-input"
         await memory.recall(chat_context, state["conversation"])
         run.emit("memory.recalled", count=len(memory.recalled), memories=memory.recalled,
                  ids=[str(item["id"]) for item in memory.recalled])
         run.node = None
     outputs = {}
+    initial_context = dict(state["conversation"])
     selected_paths = {}
     nodes = {n.id: n for n in graph.nodes}
     for node in [nodes["api-input"], *plan]:
@@ -121,6 +156,7 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
             run.emit("node.skipped", reason="An input path was not selected.")
             continue
         inputs = {e.id: outputs[e.source] for e in parents}
+        recalled = memory.recalled if memory and legacy_memory else outputs.get(memory_sources.get(node.id), [])
         run.emit("node.started", inputs=[{"wire": e.id, "name": e.name, "source": e.source, "value": inputs[e.id]}
                                           for e in parents])
         if node.type == "apiInput":
@@ -132,6 +168,29 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
                     chat_context = request
         elif node.type == "apiResponse":
             output = inputs[parents[0].id] if parents else ""
+        elif node.type == "recall":
+            query = inputs[parents[0].id]
+            if isinstance(query, dict) and isinstance(query.get("message"), str):
+                query = query["message"]
+            if not isinstance(query, str):
+                query = json_text(query)
+            output = await memory.search(query, initial_context if node.data.includeQueryState else None, node.id) if memory else []
+            run.emit("memory.recalled", count=len(output), memories=output, ids=[item["id"] for item in output],
+                     enabled=memory is not None)
+        elif node.type == "remember":
+            output = 0
+            if memory:
+                chat = chat_context or ChatRequest.from_wire(value)
+                if node.data.memoryEvidence == "exchange":
+                    payload = exchange_payloads.get(parents[0].source) or {
+                        "history": [turn.model_dump() for turn in chat.history],
+                        "latestTurn": {"user": chat.message, "assistant": outputs["api-response"]}}
+                else:
+                    payload = {"evidence": inputs[parents[0].id]}
+                agent = agents.get(str(node.data.extractorAgentId), {})
+                output = await extract_memories(memory, payload, agent, studio, run, node.id, chat)
+            else:
+                run.emit("memory.extracted", count=0, memories=[], enabled=False)
         elif node.type == "json":
             output = assemble(node.data.objectDefinition, inputs, {e.id: e.readAs for e in parents}, run.emit)
         elif node.type == "state":
@@ -148,18 +207,12 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
                     payload["history"] = [turn.model_dump() for turn in chat.history]
                     payload["latestTurn"] = {"user": chat.message, "assistant": outputs["api-response"]}
                     if memory:
-                        payload["recalledMemories"] = memory.recalled
+                        payload["recalledMemories"] = recalled
+                    exchange_payloads[node.id] = payload
                 result = await run_agent(library, studio, agents[str(definition.agentId)], payload, run.emit,
-                                         memories=memory.recalled if memory else None)
-                if memory and definition.includeChatTurn and definition.captureMemories:
-                    agent = agents[str(definition.agentId)]
-                    selection = agent.get("modelSelection")
-                    model = provider_model(agent["endpoint"], selection["model"]) if selection else studio.model
-                    before = len(memory.pending)
-                    await memory.capture(payload, ObservedModel(model, run.emit), node.id)
-                    selected = memory.pending[before:]
-                    run.emit("memory.extracted", count=len(selected),
-                             memories=[{key: item[key] for key in ("content", "kind", "evidence")} for item in selected])
+                                         memories=recalled, design_session=design_session)
+                if memory and legacy_memory and definition.includeChatTurn and definition.captureMemories:
+                    await extract_memories(memory, payload, agents[str(definition.agentId)], studio, run, node.id)
                 write_value = {"result": result} if definition.operation == "generateObject" else result
             current = definition.apply(bucket, write_value, graph.stateObject, run.emit)
             run.emit("state.applied", key=definition.key, scope=definition.scope, operation=definition.operation, value=current)
@@ -172,25 +225,49 @@ async def execute(graph, agents, library, studio, value, run, chat_context=None,
                      wires=[e.id for e in graph.edges if e.source == node.id and e.sourceHandle == path_id])
         else:
             definition = agents[str(node.data.definition.id)]
+            profile = (profiles or {}).get(profile_ids.get(node.id))
+            identity = identities.for_profile(profile) if identities and profile else None
             output = await run_agent(library, studio, definition, inputs[parents[0].id], run.emit,
                                      selection=node.data.inputSelection, chat_context=chat_context,
-                                     memories=memory.recalled if memory else None,
-                                     personality=personality if node.data.usePersonality else None,
-                                     identity=identity if node.data.usePersonality else None)
+                                     memories=recalled,
+                                     personality=profile, identity=identity, design_session=design_session)
+            if identity:
+                identities.replies[profile.id] = output
         outputs[node.id] = output
         run.emit("node.completed", output=output, duration_ms=round((perf_counter()-start)*1000))
+        if node.type == "apiResponse":
+            yield output
     run.node = None
-    return outputs["api-response"]
 
 
-async def perform(document: FlowSnapshot, library, studio, value, run, chat_context=None, turn=None, memory=None, identity=None):
+async def execute(*args, **kwargs):
+    steps = execution_steps(*args, **kwargs)
+    reply = await anext(steps)
+    await anext(steps, None)
+    return reply
+
+
+async def run_steps(document: FlowSnapshot, library, studio, value, run, chat_context=None, turn=None, memory=None, identities=None,
+                    *, design_request=None, render_response=None):
     run.emit("run.started", input=value)
     try:
-        result = await asyncio.wait_for(execute(document.graph, document.agent_definitions(), library, studio,
-            value, run, chat_context, turn.objects if turn else None, memory, document.personality, identity), RUN_TIMEOUT)
-        if identity and chat_context:
-            await identity.reflect(chat_context, result)
-        run.finish("completed", result=result, turn=turn, memory=memory, identity=identity)
+        design = DesignSession(design_request, run.emit) if design_request is not None else None
+        steps = execution_steps(document.graph, document.agent_definitions(), library, studio,
+            value, run, chat_context, turn.objects if turn else None, memory, document.profiles(), identities, design)
+        started = perf_counter()
+        result = await asyncio.wait_for(anext(steps), RUN_TIMEOUT)
+        remaining = RUN_TIMEOUT - (perf_counter() - started)
+        if render_response:
+            response = render_response(result)
+            run.publish_reply(result, turn)
+            yield response
+        else:
+            yield result
+        await asyncio.wait_for(anext(steps, None), remaining)
+        if identities and chat_context:
+            await identities.reflect(chat_context)
+        sessions = [identities.sessions[key] for key in sorted(identities.sessions)] if identities else []
+        run.finish("completed", result=result, turn=turn, memory=memory, identities=sessions)
     except HTTPException as exc:
         run.finish("failed", error=exc.detail)
         raise
@@ -207,11 +284,39 @@ async def perform(document: FlowSnapshot, library, studio, value, run, chat_cont
         logging.getLogger(__name__).error("Flow run %s failed (%s)", run.id, type(exc).__name__)
         run.finish("failed", error=f"Execution failed ({type(exc).__name__}).")
         raise HTTPException(503, "Flow execution failed. Check the model and database.") from exc
+
+
+async def perform(*args, **kwargs):
+    steps = run_steps(*args, **kwargs)
+    result = await anext(steps)
+    await anext(steps, None)
     return result
 
 
-async def run_in_background(*args):
+class FlowResponse(Response):
+    """Send the HTTP body before continuing the same run under the ASGI server's lifecycle."""
+    def __init__(self, response, steps):
+        super().__init__(response.body, status_code=response.status_code, headers=response.headers)
+        self.steps = steps
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Also finish if the peer disconnects during send. The run owns errors from here on.
+            try:
+                await anext(self.steps, None)
+            except HTTPException:
+                pass
+
+
+async def respond(*args, render_response, **kwargs):
+    steps = run_steps(*args, render_response=render_response, **kwargs)
+    return FlowResponse(await anext(steps), steps)
+
+
+async def run_in_background(*args, **kwargs):
     try:
-        await perform(*args)
+        await perform(*args, **kwargs)
     except HTTPException:
         pass  # The terminal error is persisted for the Run inspector.

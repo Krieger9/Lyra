@@ -68,7 +68,7 @@ async function loadHome() {
   for (const field of document.querySelectorAll("[data-library]")) field.textContent = home.prompt_library;
   sidebar.hidden = false;
   document.querySelector("#workspace").hidden = false;
-  const { initializeNavigation } = await import(assetUrl("/admin/navigation.js"));
+  const { initializeNavigation, prepareFlowView } = await import(assetUrl("/admin/navigation.js"));
   initializeNavigation();
   window.lyraAdminRequest = async (path, options = {}) => {
     const { accessToken } = await auth.client.acquireTokenSilent({ scopes: auth.scopes, account });
@@ -108,17 +108,10 @@ async function loadHome() {
     stylesheet.rel = "stylesheet";
     stylesheet.href = assetUrl("/admin/flow-assets/editor.css");
     document.head.append(stylesheet);
-    const url = new URL(location.href);
-    if (!["id", "run", "draft", "new"].some(key => url.searchParams.has(key))) {
-      try {
-        const binding = await window.lyraAdminRequest("/api/admin/chat-flow");
-        if (binding) {
-          url.searchParams.set("id", binding.id);
-          history.replaceState(history.state, "", url);
-        }
-      } catch (error) {
-        flowLookupError = "Could not select the chat flow. " + error.message;
-      }
+    try {
+      await prepareFlowView(account.homeAccountId, () => window.lyraAdminRequest("/api/admin/chat-flow"));
+    } catch (error) {
+      flowLookupError = "Could not select the chat flow. " + error.message;
     }
     await import(assetUrl("/admin/flow-assets/editor.js"));
   }

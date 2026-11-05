@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import unittest
 from datetime import timedelta
@@ -185,12 +187,28 @@ class IdentityDatabaseTests(unittest.IsolatedAsyncioTestCase):
             {"output": [{"type": "function_call", "name": "library_write", "call_id": "create", "arguments":
                 '{"node":{"id":"astronomy","parent":"interests","kind":"interest","title":"Astronomy"},"reason":"Independent choice"}'}]},
             answer("I chose astronomy."), answer("No change")]
-        model = SimpleNamespace(key="openai", model=SimpleNamespace(id="fake"), request=AsyncMock(side_effect=calls))
+        reflecting, release = asyncio.Event(), asyncio.Event()
+        bodies = []
+
+        async def observe_response(scope, receive, send):
+            async def observe(message):
+                await send(message)
+                if scope["path"] == "/api/chat" and message["type"] == "http.response.body":
+                    bodies.append(json.loads(message["body"]))
+            await app(scope, receive, observe)
+
+        async def provider(*args, **kwargs):
+            if len(calls) == 1:
+                reflecting.set()
+                await release.wait()
+            return calls.pop(0)
+
+        model = SimpleNamespace(key="openai", model=SimpleNamespace(id="fake"), request=AsyncMock(side_effect=provider))
         studio = SimpleNamespace(model=model, traces=Mock())
         with patch.object(app.state, "library", self.library, create=True), patch.object(app.state, "studio", studio, create=True), \
              patch.dict(os.environ, {"LYRA_MEMORY_ENABLED": "false"}), \
              patch.dict(app.dependency_overrides, {require_admin_access: lambda: ["User.Admin"], require_chat_access: chat_auth, require_identity_owner: owner_auth}):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(observe_response), base_url="http://test") as client:
                 agent = (await client.post("/api/admin/agents", json={"name": "Lyra"})).json()
                 graph = {"nodes": [
                     {"id": "api-input", "type": "apiInput", "position": {"x": 0, "y": 0}, "data": {"chatInput": True, "personalityId": str(self.personality.id)}},
@@ -201,10 +219,20 @@ class IdentityDatabaseTests(unittest.IsolatedAsyncioTestCase):
                 result = await client.put("/api/admin/chat-flow/" + flow["id"], json={"revision": 1})
                 self.assertEqual(result.status_code, 200, result.text)
                 headers = {"X-Lyra-Conversation-Id": str(uuid4()), "X-Lyra-Turn-Id": str(uuid4())}
-                response = await client.post("/api/chat", json={"message": "Choose an interest."}, headers=headers)
+                body = {"message": "Choose an interest."}
+                first = asyncio.create_task(client.post("/api/chat", json=body, headers=headers))
+                try:
+                    await asyncio.wait_for(reflecting.wait(), 5)
+                    self.assertEqual(bodies, [{"reply": "I chose astronomy."}])
+                    repeated = await asyncio.wait_for(client.post("/api/chat", json=body, headers=headers), 3)
+                    run_details = (await client.get("/api/admin/runs/" + repeated.headers["X-Lyra-Run-Id"])).json()
+                    self.assertEqual((run_details["status"], run_details["result"]), ("running", "I chose astronomy."))
+                finally:
+                    release.set()
+                    response = await first
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["reply"], "I chose astronomy.")
-                repeated = await client.post("/api/chat", json={"message": "Choose an interest."}, headers=headers)
+                self.assertEqual(repeated.headers["X-Lyra-Run-Id"], response.headers["X-Lyra-Run-Id"])
                 self.assertEqual(repeated.json(), response.json())
                 self.assertEqual(model.request.await_count, 3)
                 self.assertEqual(self.open().revision, 2)

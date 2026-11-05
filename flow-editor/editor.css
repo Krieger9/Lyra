@@ -60,6 +60,13 @@ body:has(.flow-editor) .layout { min-height: 0; }
 .api-input-card .item-kind { color: #316754; }
 .personality-card { border-color: #c999ad; background: #fff5f9; }
 .personality-card .item-kind { color: #85425f; }
+.flow-canvas .flow-port.personality-port { background: #99486b; }
+.personality-port-label { display: block; margin-top: 5px; font-size: 10px; color: #85425f; }
+.personality-wire .react-flow__edge-path { stroke: #99486b; stroke-dasharray: 5 3; }
+.memory-card { background: #f1f8fb; border-color: #81a9ba; }
+.memory-card .item-kind { color: #356078; }
+.flow-canvas .flow-port.memory-port { background: #39728a; }
+.memories-wire .react-flow__edge-path { stroke: #39728a; stroke-dasharray: 3 3; }
 .api-response-card { display: flex; align-items: center; gap: 10px; width: 200px; border-color: #8bafcc; background: #f3f8fd; }
 .api-response-card .api-input-icon { color: #245b83; background: #dcebf7; flex: none; }
 .api-response-card .item-kind { color: #245b83; }

@@ -19,6 +19,7 @@ export async function mountConfiguration(page) {
     <div class="configuration-heading"><h2></h2><a class="create-link"></a></div>
     <ul class="configuration-list"></ul>
     <p class="configuration-empty" hidden></p>
+    <section id="designer-chat" hidden aria-label="System Flow Designer chat"></section>
     <form class="configuration-form" hidden>
       <h3></h3>
       <label for="definition-name">Name</label>
@@ -93,6 +94,12 @@ export async function mountConfiguration(page) {
     link.href = editorUrl(agentsPage ? { id: entry.id } : { name: entry.name });
     link.textContent = agentsPage ? entry.name : promptLabel(entry);
     row.append(link);
+    if (entry.systemAgent === "flow-designer") {
+      const chat = document.createElement("a");
+      chat.href = editorUrl({ id: entry.id, chat: "1" });
+      chat.textContent = "Open chat";
+      row.append(" · ", chat);
+    }
     list.append(row);
   }
   list.hidden = isEditor;
@@ -111,6 +118,11 @@ export async function mountConfiguration(page) {
   if (!query.has("new") && !editing) {
     status.textContent = "This definition could not be found. Return to the list.";
     return;
+  }
+  if (editing?.systemAgent === "flow-designer") {
+    const { mountDesignerChat } = await import("/admin/designer-chat.js?v=" + encodeURIComponent(window.lyraAssetVersion));
+    mountDesignerChat(host.querySelector("#designer-chat"), editing);
+    if (query.has("chat")) return;
   }
   form.hidden = false;
   form.querySelector("h3").textContent = (editing ? "Edit " : "Create ") + (agentsPage ? "agent" : "prompt");

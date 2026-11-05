@@ -2,8 +2,8 @@
 import asyncio
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from prompt_studio import StorageConflictError
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from prompt_studio import NotFoundError, StorageConflictError
 from pydantic import JsonValue
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ from chat_input import InputSelection
 from flow_graph import FlowRun
 from json_mapping import MappingError
 from providers import catalog_entries
+from design_session import DesignSession
 
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin_access)])
@@ -79,18 +80,29 @@ async def test_agent(agent_id: UUID, body: AgentTestInput, request: Request, res
     if definition is None:
         raise HTTPException(404, "Agent definition not found.")
     response.headers["Cache-Control"] = "no-store"
+    session = DesignSession(request)
+
+    def failure(status, detail):
+        if session.receipts:
+            calls = ", ".join(f"{r['operation']} (HTTP {r['status']})" for r in session.receipts)
+            detail = f"{detail} API calls already made: {calls}. Check their results before retrying."
+        return HTTPException(status, detail)
+
     try:
         output = await asyncio.wait_for(run_agent(library, request.app.state.studio, definition, body.input,
-                                                  selection=body.inputSelection, chat_context=body.chatContext), 120)
+                                                  selection=body.inputSelection, chat_context=body.chatContext,
+                                                  design_session=session), 120)
     except MappingError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    except HTTPException:
+        raise failure(422, str(exc)) from exc
+    except HTTPException as exc:
+        if session.receipts:
+            raise failure(exc.status_code, exc.detail) from exc
         raise
     except asyncio.TimeoutError:
-        raise HTTPException(504, "Agent test timed out.")
+        raise failure(504, "Agent test timed out.")
     except Exception:
-        raise HTTPException(503, "Agent test failed. Check the model and database.")
-    return {"output": output}
+        raise failure(503, "Agent test failed. Check the model and database.")
+    return {"output": output, **({"operations": session.receipts} if definition.get("systemAgent") else {})}
 
 
 @router.post("/prompts", status_code=201)
@@ -99,3 +111,13 @@ def save_prompt(body: PromptWrite, library=Depends(library_for)):
         return library.add(body.name, body.text)
     except StorageConflictError:
         raise HTTPException(409, "Another prompt version was published at the same time. Try saving again.")
+
+
+@router.get("/prompts")
+def read_prompt(name: str, response: Response, version: int | None = Query(None, ge=1), library=Depends(library_for)):
+    """Read one prompt's text and version. Omit version to read the latest publication."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return library.get(name, version)
+    except NotFoundError as exc:
+        raise HTTPException(404, "Prompt version not found.") from exc
