@@ -19,10 +19,12 @@ export type AgentDefinition = {
   outputSchema: { fields: OutputField[] } | null;
   revision: number;
   toolSets?: string[];
+  promptSetId?: string | null;
   modelSelection?: { providerId: string; model: string } | null;
 };
 export type LibraryPrompt = PromptReference & { text: string };
-export type Catalog = { agents: AgentDefinition[]; prompts: LibraryPrompt[]; providers: { id: string; name: string }[] };
+export type Catalog = { agents: AgentDefinition[]; prompts: LibraryPrompt[]; providers: { id: string; name: string }[];
+  promptSets?: {id: string; name: string; prompts: string[]}[] };
 
 declare global {
   interface Window {

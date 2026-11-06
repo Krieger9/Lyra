@@ -21,11 +21,13 @@ import { allowsConnection, graphDocument, hydrateGraph, nextWireName, openGraph,
   type Agent, type ApiInput, type FlowItem, type GenericItem, type JsonItem, type PanelSize,
   type SavedGraph, type Wire } from "./graph";
 import { draftSession, linkWithReturn, renderBreadcrumbs } from "../static/admin/navigation.js";
+import { effectivePromptSet } from "../static/admin/prompt-sets.js";
 
 type FlowDraft = { items: FlowItem[]; edges: Wire[]; tool: string; nextNumber: number; viewport: Viewport; panelSize: PanelSize;
   personalityMode?: "wired";
   memoryMode?: "wired";
   stateObject?: Record<string, unknown>;
+  promptSetId?: string | null;
   flowId?: string; revision?: number; name?: string; lastSaved?: string };
 type FlowSummary = { id: string; name: string; revision: number };
 type SavedFlow = FlowSummary & { graph: SavedGraph };
@@ -129,6 +131,7 @@ const edgeOptions = { markerEnd: { type: MarkerType.ArrowClosed }, style: { stro
 function Editor() {
   const [draft] = useState(() => draftSession<FlowDraft>());
   const [stateObject, setStateObject] = useState(draft.data?.stateObject ?? {});
+  const [promptSetId, setPromptSetId] = useState<string | null>(draft.data?.promptSetId ?? null);
   const [initialGraph] = useState(() => openGraph(draft.data?.items, draft.data?.edges, draft.data?.personalityMode, draft.data?.memoryMode));
   const [items, setItems, onNodesChange] = useNodesState<FlowItem>(initialGraph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Wire>(initialGraph.wires);
@@ -181,7 +184,9 @@ function Editor() {
   const minimumPanelSize = Math.min(stacked ? 120 : 220, maximumPanelSize);
   const clampPanelSize = (value: number) => Math.max(minimumPanelSize, Math.min(maximumPanelSize, value));
   const currentPanelSize = clampPanelSize(stacked ? panelSize.height : panelSize.width);
-  const hasChanges = Boolean(invalidBase) || lastSaved !== JSON.stringify({ name: flowName.trim(), graph: graphDocument(items, edges, viewport, panelSize, stateObject) });
+  const hasChanges = Boolean(invalidBase) || lastSaved !== JSON.stringify({ name: flowName.trim(), graph: graphDocument(items, edges, viewport, panelSize, stateObject, promptSetId) });
+  const promptSetName = (id: string | null | undefined) => catalog.promptSets?.find(set => set.id === id)?.name ?? (id ? "Unavailable set" : "All prompts");
+  const agentLink = (destination: string, node: string) => linkWithReturn(destination, {node, flowPromptSet: promptSetId ?? ""});
 
   function resizePanel(value: number) {
     const size = Math.round(clampPanelSize(value));
@@ -210,15 +215,15 @@ function Editor() {
     return () => { live = false; };
   }, []);
   useEffect(() => {
-    draft.save({ items, edges, personalityMode: "wired", memoryMode: "wired", tool, nextNumber: nextNumber.current, viewport, panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
-  }, [draft, items, edges, tool, viewport, panelSize, flowId, revision, flowName, lastSaved, stateObject]);
+    draft.save({ items, edges, personalityMode: "wired", memoryMode: "wired", tool, nextNumber: nextNumber.current, viewport, panelSize, flowId, revision, name: flowName, lastSaved, stateObject, promptSetId });
+  }, [draft, items, edges, tool, viewport, panelSize, flowId, revision, flowName, lastSaved, stateObject, promptSetId]);
   useEffect(() => {
     function saveBeforeLeaving() {
-      draft.save({ items, edges, personalityMode: "wired", memoryMode: "wired", tool, nextNumber: nextNumber.current, viewport: getViewport(), panelSize, flowId, revision, name: flowName, lastSaved, stateObject });
+      draft.save({ items, edges, personalityMode: "wired", memoryMode: "wired", tool, nextNumber: nextNumber.current, viewport: getViewport(), panelSize, flowId, revision, name: flowName, lastSaved, stateObject, promptSetId });
     }
     window.addEventListener("pagehide", saveBeforeLeaving);
     return () => window.removeEventListener("pagehide", saveBeforeLeaving);
-  }, [draft, items, edges, tool, getViewport, panelSize, flowId, revision, flowName, lastSaved, stateObject]);
+  }, [draft, items, edges, tool, getViewport, panelSize, flowId, revision, flowName, lastSaved, stateObject, promptSetId]);
 
   useEffect(() => {
     window.lyraAdminRequest<FlowSummary[]>("/api/admin/flows").then(setSavedFlows)
@@ -233,6 +238,7 @@ function Editor() {
       const { nodes, wires } = hydrateGraph(saved.graph, catalog.agents);
       setItems(nodes);
       setStateObject(saved.graph.stateObject ?? {});
+      setPromptSetId(saved.graph.promptSetId ?? null);
       setEdges(wires);
       setViewport(saved.graph.viewport);
       void setCanvasViewport(saved.graph.viewport);
@@ -240,7 +246,7 @@ function Editor() {
       setFlowId(saved.id);
       setRevision(saved.revision);
       setFlowName(saved.name);
-      setLastSaved(JSON.stringify({ name: saved.name, graph: graphDocument(nodes, wires, saved.graph.viewport, saved.graph.panelSize, saved.graph.stateObject) }));
+      setLastSaved(JSON.stringify({ name: saved.name, graph: graphDocument(nodes, wires, saved.graph.viewport, saved.graph.panelSize, saved.graph.stateObject, saved.graph.promptSetId) }));
       setLoadingFlow(false);
       setFlowStatus("Flow opened.");
       nextNumber.current = nodes.length;
@@ -254,7 +260,7 @@ function Editor() {
     setSavingFlow(true);
     setFlowStatus("Saving flow…");
     try {
-      const payload = { name: flowName.trim(), graph: graphDocument(items, edges, getViewport(), panelSize, stateObject) };
+      const payload = { name: flowName.trim(), graph: graphDocument(items, edges, getViewport(), panelSize, stateObject, promptSetId) };
       const saved = await window.lyraAdminRequest<SavedFlow>("/api/admin/flows" + (flowId ? "/" + flowId : ""), {
         method: flowId ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...payload, revision }),
@@ -282,7 +288,7 @@ function Editor() {
       const saved = await saveFlow();
       if (saved) setRunDesign(saved);
     } else {
-      setRunDesign({id: flowId, name: flowName, revision, graph: {nodes: items, edges, viewport, panelSize, stateObject}});
+      setRunDesign({id: flowId, name: flowName, revision, graph: {nodes: items, edges, viewport, panelSize, stateObject, promptSetId}});
     }
   }
 
@@ -424,6 +430,14 @@ function Editor() {
       <form className="flow-actions" onSubmit={saveFlow}>
         <label htmlFor="flow-name">Flow name</label>
         <input id="flow-name" value={flowName} onChange={event => setFlowName(event.target.value)} required maxLength={120} />
+        <label htmlFor="flow-prompt-set">Default prompt set</label>
+        <select id="flow-prompt-set" value={promptSetId ?? ""} disabled={!catalogReady || loadingFlow}
+          onChange={event => setPromptSetId(event.target.value || null)}>
+          <option value="">All prompts</option>
+          {promptSetId && !catalog.promptSets?.some(set => set.id === promptSetId) && <option value={promptSetId}>Unavailable set</option>}
+          {catalog.promptSets?.map(set => <option key={set.id} value={set.id}>{set.name}</option>)}
+        </select>
+        <a href={linkWithReturn("/admin/prompts/?" + new URLSearchParams({set: effectivePromptSet(null, promptSetId)}))}>Open flow prompt set</a>
         <button type="submit" disabled={savingFlow || loadingFlow || Boolean(invalidBase)}>Save flow</button>
         <button type="button" disabled={savingFlow || loadingFlow || Boolean(invalidBase) || !flowName.trim()}
           onClick={openRun}>{hasChanges ? "Save and run…" : "Run flow…"}</button>
@@ -599,7 +613,7 @@ function Editor() {
               <option value="">Unconfigured — choose an agent…</option>
               {catalog.agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
             </select>
-            <a href={linkWithReturn("/admin/agents/?new=1", { node: selected.id })}>Create agent</a>
+            <a href={agentLink("/admin/agents/?new=1", selected.id)}>Create agent</a>
             <button type="button" onClick={() => setCatalogRefresh(current => current + 1)}>Refresh agents</button>
             {catalogStatus && <p className="catalog-status" role="status">{catalogStatus}</p>}
             {agentConfigurationError(selected.data.definition) && <p className="agent-error" role="alert">
@@ -643,7 +657,12 @@ function Editor() {
           {selected.type === "agent" && selected.data.definition && <>
             <SelectionEditor selection={selected.data.inputSelection}
               change={inputSelection => updateNodeData(selected.id, {inputSelection})} />
-            <a href={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}`, { node: selected.id })}>Edit agent definition</a>
+            <label>Prompt set</label>
+            <p>{promptSetName(selected.data.definition.promptSetId || promptSetId)}
+              {selected.data.definition.promptSetId ? " · Agent override" : " · Inherited from flow"}</p>
+            <a href={agentLink(`/admin/agents/?id=${selected.data.definition.id}&focus=prompt-set`, selected.id)}>Change agent prompt set</a>
+            <a href={linkWithReturn("/admin/prompts/?" + new URLSearchParams({set: effectivePromptSet(selected.data.definition.promptSetId, promptSetId)}))}>Open prompt set</a>
+            <a href={agentLink(`/admin/agents/?id=${selected.data.definition.id}`, selected.id)}>Edit agent definition</a>
             <h3>Request model</h3>
             <p>{selected.data.definition.modelSelection
               ? [catalog.providers.find(p => p.id === selected.data.definition?.modelSelection?.providerId)?.name,
@@ -660,7 +679,7 @@ function Editor() {
             <AgentOutput key={[selected.id, selected.data.definition.id, selected.data.definition.revision].join(":")}
               agent={selected.data.definition}
               selection={selected.data.inputSelection}
-              editUrl={linkWithReturn(`/admin/agents/?id=${selected.data.definition.id}&focus=output`, { node: selected.id })} />
+              editUrl={agentLink(`/admin/agents/?id=${selected.data.definition.id}&focus=output`, selected.id)} />
           </>}
           <h3>{selected.type === "recall" ? "Search query" : selected.type === "remember" ? "Evidence input" : "Inputs"}</h3>
           {selected.type !== "item" ? <>

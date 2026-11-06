@@ -1,5 +1,7 @@
 const { draftSession, linkWithReturn, renderBreadcrumbs, returnDestination, returnWithSelection } =
   await import("/admin/navigation.js?v=" + encodeURIComponent(window.lyraAssetVersion));
+const { ALL_PROMPTS, UNFILED_PROMPTS, normalizeSet, filterPrompts, promptChoices, effectivePromptSet } =
+  await import("/admin/prompt-sets.js?v=" + encodeURIComponent(window.lyraAssetVersion));
 
 const request = (...args) => window.lyraAdminRequest(...args);
 const RAW_INPUT = "raw";
@@ -14,9 +16,36 @@ function option(value, label) {
 }
 
 export async function mountConfiguration(page) {
+  if (page === "prompts") {
+    document.body.classList.add("prompt-workspace");
+    const query = new URLSearchParams(location.search);
+    if (!["new", "id", "name"].some(key => query.has(key))) {
+      const { mountPromptBrowser } = await import("/admin/prompt-browser.js?v=" + encodeURIComponent(window.lyraAssetVersion));
+      await mountPromptBrowser(document.getElementById("prompts-page"));
+      return;
+    }
+  }
   const host = document.getElementById(page + "-page");
   host.innerHTML = `
     <div class="configuration-heading"><h2></h2><a class="create-link"></a></div>
+    <section class="prompt-set-controls" hidden aria-label="Prompt sets">
+      <label for="prompt-set-filter">Prompt set</label>
+      <select id="prompt-set-filter"></select>
+      <p>Choose a set to focus on its prompts. Shared prompts can belong to several sets.</p>
+      <details class="create-set"><summary>Create prompt set</summary>
+        <label for="prompt-set-name">Set name</label>
+        <input id="prompt-set-name" maxlength="120" autocomplete="off">
+        <button id="create-prompt-set" type="button">Create set</button>
+      </details>
+      <div class="prompt-set-bulk" hidden>
+        <label><input id="select-all-prompts" type="checkbox"> Select all shown</label>
+        <label for="prompt-set-target">Add selected prompts to</label>
+        <select id="prompt-set-target"></select>
+        <button id="add-to-set" type="button">Add to set</button>
+        <button id="remove-from-set" type="button" hidden>Remove from this set</button>
+        <span id="prompt-selection-count" role="status"></span>
+      </div>
+    </section>
     <ul class="configuration-list"></ul>
     <p class="configuration-empty" hidden></p>
     <section id="designer-chat" hidden aria-label="System Flow Designer chat"></section>
@@ -46,9 +75,11 @@ export async function mountConfiguration(page) {
         <section id="agent-output"></section>
       </div>
       <div class="prompt-fields" hidden>
+        <label for="prompt-save-set">Add to prompt set</label>
+        <select id="prompt-save-set"></select>
         <label for="prompt-text">Template</label>
         <textarea id="prompt-text" rows="14" maxlength="100000"></textarea>
-        <p>Saving an existing prompt creates a new version.</p>
+        <p>Saving an existing prompt creates a new version. Prompt names are shared across all sets.</p>
       </div>
       <div class="configuration-actions"><button type="submit">Save</button><a class="cancel-link">Back to list</a></div>
     </form>
@@ -59,8 +90,8 @@ export async function mountConfiguration(page) {
   const query = new URLSearchParams(location.search);
   function editorUrl(parameters) {
     const target = new URLSearchParams(parameters);
-    for (const key of ["returnTo", "field", "node"]) {
-      if (query.has(key)) target.set(key, query.get(key));
+    for (const key of ["returnTo", "field", "node", "set", "flowPromptSet"]) {
+      if (query.has(key) && !target.has(key)) target.set(key, query.get(key));
     }
     return base + "?" + target;
   }
@@ -77,7 +108,18 @@ export async function mountConfiguration(page) {
   const text = host.querySelector("#prompt-text");
   const save = form.querySelector('[type="submit"]');
   let catalog = await request("/api/admin/catalog");
-  let editing = null;
+  let sets = catalog.promptSets ?? [];
+  const setStorageKey = "lyra.promptSet." + (window.lyraPromptSetScope ?? "default");
+  let editing = agentsPage ? catalog.agents.find(entry => entry.id === query.get("id")) ?? null : null;
+  const flowSet = query.get("flowPromptSet") || null;
+  let agentSet = draft?.data && "promptSetId" in draft.data ? draft.data.promptSetId : editing?.promptSetId ?? null;
+  let rememberedSet;
+  try { rememberedSet = localStorage.getItem(setStorageKey); } catch {}
+  let activeSet = agentsPage ? effectivePromptSet(agentSet, flowSet)
+    : normalizeSet(draft?.data?.promptSet ?? query.get("set") ?? rememberedSet, sets);
+  const setFilter = host.querySelector("#prompt-set-filter");
+  const setTarget = host.querySelector("#prompt-set-target");
+  const saveSet = host.querySelector("#prompt-save-set");
   host.querySelector("h2").textContent = title;
   const create = host.querySelector(".create-link");
   create.href = editorUrl({ new: "1" });
@@ -89,28 +131,142 @@ export async function mountConfiguration(page) {
 
   const entries = agentsPage ? catalog.agents : [...new Map(catalog.prompts.map(entry => [entry.name, entry])).values()];
   const list = host.querySelector(".configuration-list");
-  for (const entry of entries) {
-    const row = document.createElement("li");
-    const link = document.createElement("a");
-    link.href = editorUrl(agentsPage ? { id: entry.id } : { name: entry.name });
-    link.textContent = agentsPage ? entry.name : promptLabel(entry);
-    row.append(link);
-    if (entry.systemAgent === "flow-designer") {
-      const chat = document.createElement("a");
-      chat.href = editorUrl({ id: entry.id, chat: "1" });
-      chat.textContent = "Open chat";
-      row.append(" · ", chat);
+  const controls = host.querySelector(".prompt-set-controls");
+  controls.hidden = agentsPage ? !isEditor : isEditor;
+  if (agentsPage && isEditor) host.querySelector(".agent-fields").prepend(controls);
+  const checkedNames = () => [...list.querySelectorAll("input:checked")].map(input => input.value);
+  function selectionChanged() {
+    const count = checkedNames().length;
+    host.querySelector("#add-to-set").disabled = !count || !setTarget.value;
+    host.querySelector("#remove-from-set").disabled = !count;
+    host.querySelector("#prompt-selection-count").textContent = count + " selected";
+    const all = host.querySelector("#select-all-prompts");
+    const total = list.querySelectorAll("input").length;
+    all.checked = total > 0 && count === total;
+    all.indeterminate = count > 0 && count < total;
+  }
+  function refreshSetOptions() {
+    if (agentsPage) {
+      activeSet = effectivePromptSet(agentSet, flowSet);
+      const inherited = flowSet ? sets.find(set => set.id === flowSet)?.name ?? "Unavailable set" : "All prompts";
+      setFilter.replaceChildren(option("", "Inherit from flow · " + inherited),
+        ...(agentSet && !sets.some(set => set.id === agentSet) ? [option(agentSet, "Unavailable set")] : []),
+        ...sets.map(set => option(set.id, set.name)));
+      setFilter.value = agentSet ?? "";
+      controls.querySelector("p").textContent = agentSet
+        ? "Agent override. This set applies wherever this reusable agent is used. Existing prompt selections stay visible."
+        : "Uses the flow’s default prompt set, or All prompts outside a flow. Choose a set here to override it for this agent.";
+    } else {
+      activeSet = normalizeSet(activeSet, sets);
+      setFilter.replaceChildren(option(ALL_PROMPTS, "All prompts"), option(UNFILED_PROMPTS, "Unfiled prompts"),
+        ...sets.map(set => option(set.id, set.name + " (" + set.prompts.length + ")")));
+      setFilter.value = activeSet;
     }
-    list.append(row);
+    const target = setTarget.value;
+    setTarget.replaceChildren(option("", "Choose a set…"), ...sets.map(set => option(set.id, set.name)));
+    setTarget.value = sets.some(set => set.id === target) ? target : sets.some(set => set.id === activeSet) ? activeSet : "";
+    create.href = editorUrl({ new: "1", set: activeSet });
+    if (!query.has("returnTo")) cancel.href = base + "?" + new URLSearchParams({set: activeSet});
+  }
+  function renderList() {
+    list.replaceChildren();
+    const visible = agentsPage ? entries : filterPrompts(entries, sets, activeSet);
+    for (const entry of visible) {
+      const row = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = editorUrl(agentsPage ? { id: entry.id } : { name: entry.name, set: activeSet });
+      link.textContent = agentsPage ? entry.name : promptLabel(entry);
+      if (!agentsPage) {
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = entry.name;
+        checkbox.setAttribute("aria-label", "Select " + entry.name);
+        checkbox.addEventListener("change", selectionChanged);
+        row.append(checkbox, " ");
+      }
+      row.append(link);
+      if (entry.systemAgent === "flow-designer") {
+        const chat = document.createElement("a");
+        chat.href = editorUrl({ id: entry.id, chat: "1" });
+        chat.textContent = "Open chat";
+        row.append(" · ", chat);
+      }
+      list.append(row);
+    }
+    const empty = host.querySelector(".configuration-empty");
+    empty.hidden = isEditor || visible.length > 0;
+    empty.textContent = agentsPage ? "No agents defined yet. Create your first agent."
+      : activeSet === ALL_PROMPTS ? "No prompts in this library yet."
+      : "No prompts in this set yet. Create a prompt here, or add existing prompts from All prompts.";
+    host.querySelector(".prompt-set-bulk").hidden = agentsPage || isEditor || !entries.length;
+    host.querySelector("#remove-from-set").hidden = !sets.some(set => set.id === activeSet);
+    selectionChanged();
+  }
+  refreshSetOptions();
+  renderList();
+  function rememberSet() {
+    if (agentsPage) return;
+    try { localStorage.setItem(setStorageKey, activeSet); } catch {}
+    if (!agentsPage && !isEditor) {
+      const url = new URL(location.href);
+      url.searchParams.set("set", activeSet);
+      history.replaceState(history.state, "", url.pathname + url.search);
+    }
+  }
+  rememberSet();
+  setFilter.addEventListener("change", () => {
+    if (agentsPage) agentSet = setFilter.value || null;
+    else activeSet = setFilter.value;
+    rememberSet();
+    refreshSetOptions();
+    if (agentsPage) { populatePrompts(); persistDraft(); }
+    else {
+      renderList();
+    }
+  });
+  host.querySelector("#create-prompt-set").addEventListener("click", async event => {
+    const input = host.querySelector("#prompt-set-name");
+    if (!input.value.trim()) { status.textContent = "Enter a name for the prompt set."; input.focus(); return; }
+    event.target.disabled = true;
+    try {
+      const saved = await request("/api/admin/prompt-sets", { method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: input.value}) });
+      sets.push(saved);
+      if (agentsPage) agentSet = saved.id;
+      activeSet = saved.id;
+      rememberSet();
+      refreshSetOptions();
+      input.value = "";
+      host.querySelector(".create-set").open = false;
+      if (agentsPage) { populatePrompts(); persistDraft(); } else renderList();
+      status.textContent = "Prompt set created. New prompts will be added to this set.";
+    } catch (error) { status.textContent = error.message; }
+    finally { event.target.disabled = false; }
+  });
+  host.querySelector("#select-all-prompts").addEventListener("change", event => {
+    for (const input of list.querySelectorAll("input")) input.checked = event.target.checked;
+    selectionChanged();
+  });
+  setTarget.addEventListener("change", selectionChanged);
+  for (const [id, remove] of [["add-to-set", false], ["remove-from-set", true]]) {
+    host.querySelector("#" + id).addEventListener("click", async () => {
+      const names = checkedNames();
+      const target = remove ? activeSet : setTarget.value;
+      host.querySelectorAll(".prompt-set-bulk button").forEach(button => { button.disabled = true; });
+      try {
+        await request("/api/admin/prompt-sets/" + target + "/members", {method: "PUT",
+          headers: {"Content-Type": "application/json"}, body: JSON.stringify({names, remove})});
+        sets = await request("/api/admin/prompt-sets");
+        refreshSetOptions();
+        renderList();
+        status.textContent = remove ? "Prompts removed from this set." : "Prompts added to set.";
+      } catch (error) { status.textContent = error.message; }
+      finally { selectionChanged(); }
+    });
   }
   list.hidden = isEditor;
   create.hidden = isEditor;
   if (query.has("saved")) status.textContent = "Saved.";
-  if (!isEditor && !entries.length) {
-    const empty = host.querySelector(".configuration-empty");
-    empty.hidden = false;
-    empty.textContent = agentsPage ? "No agents defined yet. Create your first agent." : "No prompts in this library yet.";
-  }
   if (!isEditor) return;
   if (query.has("id")) editing = catalog.agents.find(entry => entry.id === query.get("id"));
   if (query.has("name")) editing = entries.find(entry => entry.name === query.get("name"));
@@ -136,6 +292,21 @@ export async function mountConfiguration(page) {
   if (!agentsPage) {
     name.readOnly = Boolean(editing);
     text.value = draft.data?.text ?? editing?.text ?? "";
+    saveSet.replaceChildren(option("", editing ? "Keep current sets" : "No set"),
+      ...sets.map(set => option(set.id, set.name)));
+    saveSet.value = draft.data?.saveSet ?? (sets.some(set => set.id === activeSet) ? activeSet : "");
+    const heading = document.createElement("div");
+    heading.className = "prompt-editor-heading";
+    heading.append(form.querySelector("h3"), form.querySelector(".configuration-actions"));
+    form.prepend(heading);
+    const fields = document.createElement("div");
+    fields.className = "prompt-editor-meta";
+    for (const input of [name, saveSet]) {
+      const field = document.createElement("div");
+      field.append(form.querySelector('label[for="' + input.id + '"]'), input);
+      fields.append(field);
+    }
+    heading.after(fields);
   }
 
   function preview(select, field) {
@@ -146,7 +317,7 @@ export async function mountConfiguration(page) {
     const edit = host.querySelector("#edit-" + field);
     edit.hidden = !entry;
     if (entry) edit.href = linkWithReturn("/admin/prompts/?" + new URLSearchParams({
-      name: entry.name, version: entry.version,
+      name: entry.name, version: entry.version, set: activeSet,
     }), { field });
   }
 
@@ -198,11 +369,16 @@ export async function mountConfiguration(page) {
         ? option(RAW_INPUT, "Raw user input")
         : option("", "Choose system instructions…");
       select.replaceChildren(placeholder,
-        ...catalog.prompts.map(entry => option(referenceKey(entry), promptLabel(entry))));
+        ...promptChoices(catalog.prompts, sets, activeSet, previous)
+          .map(entry => option(referenceKey(entry), promptLabel(entry))));
       select.value = previous;
       preview(select, field);
     }
     selectionsInitialized = true;
+    for (const field of ["instructions", "prompt"]) {
+      host.querySelector("#create-" + field).href = linkWithReturn("/admin/prompts/?" +
+        new URLSearchParams({new: "1", set: activeSet}), {field});
+    }
   }
 
   let readOutput;
@@ -216,6 +392,8 @@ export async function mountConfiguration(page) {
       modelId: catalog.models.find(m => m.name === model.value)?.id,
       outputSchema: readOutput?.(),
       toolSets: selectedSets(),
+      promptSet: activeSet, saveSet: saveSet.value,
+      promptSetId: agentSet,
     });
   }
   if (agentsPage) {
@@ -234,6 +412,7 @@ export async function mountConfiguration(page) {
     readOutput = mountOutputEditor(output, draft.data && "outputSchema" in draft.data
       ? draft.data.outputSchema : editing?.outputSchema, persistDraft);
     if (query.get("focus") === "output") output.querySelector("select").focus();
+    if (query.get("focus") === "prompt-set") setFilter.focus();
     populatePrompts();
     populateProviders(draft.data?.providerId ?? editing?.modelSelection?.providerId,
                       catalog.models.find(m => m.id === draft.data?.modelId)?.name ?? draft.data?.model ?? editing?.modelSelection?.model);
@@ -241,7 +420,6 @@ export async function mountConfiguration(page) {
     model.addEventListener("change", modelLinks);
     for (const field of ["instructions", "prompt"]) {
       const link = host.querySelector("#create-" + field);
-      link.href = linkWithReturn("/admin/prompts/?new=1", { field });
       link.addEventListener("click", persistDraft);
     }
     instructions.addEventListener("change", () => preview(instructions, "instructions"));
@@ -249,6 +427,8 @@ export async function mountConfiguration(page) {
     async function refresh() {
       try {
         catalog = await request("/api/admin/catalog");
+        sets = catalog.promptSets ?? [];
+        refreshSetOptions();
         populatePrompts();
         populateProviders(provider.value, model.value);
         status.textContent = "Prompt library refreshed.";
@@ -265,7 +445,10 @@ export async function mountConfiguration(page) {
     save.disabled = true;
     status.textContent = "Saving…";
     try {
-      let payload = { name: name.value, text: text.value };
+      if (!agentsPage && !editing && catalog.prompts.some(entry => entry.name === name.value)) {
+        throw new Error("A prompt with this name already exists. Choose a new name, or edit it from All prompts.");
+      }
+      let payload = { name: name.value, text: text.value, setId: saveSet.value || null };
       let endpoint = "/api/admin/prompts";
       let method = "POST";
       if (agentsPage) {
@@ -277,6 +460,7 @@ export async function mountConfiguration(page) {
         payload = { name: name.value, instructions: ref(instructions), prompt: ref(prompt), outputSchema: readOutput(true) };
         payload.modelSelection = provider.value ? { providerId: provider.value, model: model.value } : null;
         payload.toolSets = selectedSets();
+        payload.promptSetId = agentSet;
         endpoint = "/api/admin/agents";
         if (editing) {
           endpoint += "/" + editing.id;
@@ -289,7 +473,8 @@ export async function mountConfiguration(page) {
       });
       draft.clear();
       if (!returnWithSelection(saved, agentsPage ? "agent" : "prompt")) {
-        location.replace(base + "?saved=1");
+        const destinationSet = !agentsPage && !editing && !saveSet.value ? UNFILED_PROMPTS : saveSet.value || activeSet;
+        location.replace(base + "?" + new URLSearchParams({saved: "1", set: destinationSet}));
       }
     } catch (error) {
       status.textContent = error.message;

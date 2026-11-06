@@ -72,7 +72,7 @@ class DesignSession:
                 if isinstance(args, PromptLookup):
                     call = args.as_call()
                 elif isinstance(args, PromptWrite):
-                    call = DesignCall(operation="POST /api/admin/prompts", body=args.model_dump())
+                    call = DesignCall(operation="POST /api/admin/prompts", body=args.model_dump(mode="json"))
                 if not self.permitted(call.operation):
                     raise ValueError("Operation unavailable for this method.")
                 result = (await self.dispatch(call) if self.dispatch else

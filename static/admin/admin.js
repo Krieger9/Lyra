@@ -8,6 +8,7 @@ const toggle = document.querySelector("#nav-toggle");
 const narrow = matchMedia("(max-width: 700px)");
 const activeLink = [...sidebar.querySelectorAll("nav a")].find(link => link.pathname === location.pathname);
 const page = activeLink ? activeLink.pathname.split("/")[2] : "home";
+document.body.classList.toggle("prompt-workspace", page === "prompts");
 if (activeLink) {
   activeLink.setAttribute("aria-current", "page");
   const title = activeLink.textContent.trim();
@@ -63,6 +64,7 @@ async function loadHome() {
   if (!response.ok) throw new Error("Could not load the configuration. Refresh to try again.");
   const home = await response.json();
   window.lyraAssetVersion = home.ui_version;
+  window.lyraPromptSetScope = account.homeAccountId + "." + home.prompt_library;
   const assetUrl = path => path + "?v=" + encodeURIComponent(home.ui_version);
   for (const field of document.querySelectorAll("[data-model]")) field.textContent = home.chat_model;
   for (const field of document.querySelectorAll("[data-library]")) field.textContent = home.prompt_library;

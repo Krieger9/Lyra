@@ -112,6 +112,37 @@ On startup Lyra seeds `Instructions.default` with `You are a helpful agent` if i
 
 The editor previews selected library text and links to **PromptStudio** to create new prompts or publish revisions. Saving a prompt opened from an agent field returns to that agent form with the new version selected in that field. Saving from the standalone PromptStudio list returns to the list. Creating or editing an agent from a flow item returns to that flow and assigns the saved definition to the originating item.
 
+**PromptStudio** uses a full-width library with set navigation, searchable prompt summaries,
+and a template preview. Select a prompt to browse its versions, then choose **Edit prompt**
+to edit that version. Search matches names and the latest template text. Selecting prompts
+reveals the bulk organization controls. The editor provides a wide template area and a top save toolbar.
+
+In **PromptStudio**, use **+** beside **Prompt sets** to start an empty collection for a new flow.
+Selecting a set filters the list and remembers your choice for this account and
+library in this browser. New prompts default to the selected set. Choose **All prompts**,
+select existing prompts, and use **Add to set** to organize the library in bulk. A prompt can
+belong to multiple sets; **Remove from this set** only removes its membership. **Unfiled prompts**
+shows prompts that have no set. Sets include every version of a prompt and do not change agent
+version pins or runtime rendering; prompt names remain unique within the library.
+
+In **Flow View**, choose a **Default prompt set** and save the flow. Agents default to
+**Inherit from flow**; in the agent editor, choose a named set to override that default.
+The override belongs to the reusable agent and applies wherever it is used. Clearing it restores
+inheritance. With no flow default (or when opened outside a flow), an inheriting agent shows
+**All prompts**. The flow inspector displays the effective set and links to its library and
+the agent's override setting. Creating or editing agents from a flow carries its current default,
+including unsaved changes, through the editor and back.
+
+The effective set filters instructions and templates and is used for new prompt creation.
+Existing prompt selections and version pins stay intact when changing sets. The standalone
+PromptStudio browsing preference remains independent. Set metadata is stored in Lyra's
+`prompt_sets` and `prompt_set_members` tables, created by migration 10. Migration 11 adds
+the agent override. The flow stores `graph.promptSetId`; agents store `promptSetId`, with null
+meaning inherit. Agent updates omitting the field preserve an existing override.
+APIs are `GET/POST /api/admin/prompt-sets` and
+`PUT /api/admin/prompt-sets/{set_id}/members` (a `names` list and optional `remove: true`).
+`POST /api/admin/prompts` accepts an optional `setId` to add the published prompt to a set.
+
 Breadcrumbs show the context across admin pages. Use them or the Back and Forward controls to navigate. Unsaved forms and flow layouts, including wiring and canvas position, are restored from browser session storage in the current tab. Saved definitions and prompt versions persist in PostgreSQL.
 
 Every flow also includes a permanent **API Response**. Connect one Agent's right output port to its left input port to return its text or structured object as the response body. Chat and the flow run endpoint send HTTP 200 when the reply is ready. An unconnected API Response produces an empty result. Failures before the reply produce an HTTP error. Follow the run ID to see downstream work and any later failures. Existing browser drafts gain this response node automatically.

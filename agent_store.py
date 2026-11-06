@@ -72,6 +72,7 @@ definitions = Table(
     Column("prompt_version", Integer, nullable=True),
     Column("output_schema", JSONB(none_as_null=True)),
     Column("tool_sets", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("prompt_set_id", Uuid),
     Column("provider_id", Uuid, ForeignKey(providers.c.id)), Column("model_name", String(255)),
     CheckConstraint("(provider_id IS NULL) = (model_name IS NULL)", name="agent_model_selection_complete"),
     Column("revision", Integer, nullable=False),
@@ -105,6 +106,7 @@ class ModelSelection(BaseModel):
 
 class AgentDefinition(BaseModel):
     name: Name
+    promptSetId: UUID | None = Field(default=None, description="Prompt set override. Null inherits the containing flow's set.")
     instructions: PromptReference | None = None
     # A null reference means pass the incoming flow text through directly.
     prompt: PromptReference | None = None
@@ -127,6 +129,7 @@ class AgentUpdate(AgentDefinition):
 class PromptWrite(BaseModel):
     name: PromptName
     text: str = Field(min_length=1, max_length=100000)
+    setId: UUID | None = Field(default=None, description="Optionally add this prompt to a prompt set.")
 
 
 def builtin_protocol_id(library, adapter):
@@ -165,6 +168,7 @@ def serialize_agent(row):
         "prompt": None if row["prompt_name"] is None else {"name": row["prompt_name"], "version": row["prompt_version"]},
         "outputSchema": row["output_schema"],
         "toolSets": row["tool_sets"],
+        "promptSetId": str(row["prompt_set_id"]) if row["prompt_set_id"] else None,
         "modelSelection": {"providerId": str(row["provider_id"]), "model": row["model_name"]} if row["provider_id"] else None,
     }
 
@@ -188,6 +192,7 @@ def agent_values(body, library):
         "prompt_version": body.prompt.version if body.prompt else None,
         "output_schema": body.outputSchema.model_dump(exclude_none=True) if body.outputSchema else None,
         "tool_sets": body.toolSets,
+        "prompt_set_id": body.promptSetId,
         "provider_id": body.modelSelection.providerId if body.modelSelection else None,
         "model_name": body.modelSelection.model if body.modelSelection else None,
         "updated_at": datetime.now(timezone.utc),

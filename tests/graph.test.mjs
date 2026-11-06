@@ -6,6 +6,17 @@ import { allowsConnection, graphDocument, hydrateGraph } from "../flow-editor/gr
 const snapshot = JSON.parse(readFileSync(new URL("./fixtures/router-snapshot.json", import.meta.url)));
 const catalog = Object.values(snapshot.agents);
 
+test("flow prompt defaults survive save and reopen while agent overrides remain on definitions", () => {
+  const graph = {...snapshot.graph, promptSetId: "flow-set"};
+  const scoped = catalog.map(agent => ({...agent, promptSetId: "agent-set"}));
+  const {nodes, wires} = hydrateGraph(graph, scoped);
+  const saved = graphDocument(nodes, wires, graph.viewport, graph.panelSize, graph.stateObject, graph.promptSetId);
+  assert.equal(saved.promptSetId, "flow-set");
+  const reopened = hydrateGraph(saved, scoped);
+  assert.equal(reopened.nodes.find(node => node.type === "agent").data.definition.promptSetId, "agent-set");
+  assert.equal(graphDocument(nodes, wires, graph.viewport, graph.panelSize, {}, null).promptSetId, undefined);
+});
+
 test("saving and reopening a moved layout preserves every node's coordinates by ID", () => {
   const { nodes, wires } = hydrateGraph(snapshot.graph, catalog);
   const moved = nodes.map((node, i) => ({ ...node, position: { x: -230.75 + i * 29, y: 415.5 - i * 91 } }));

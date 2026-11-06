@@ -18,9 +18,11 @@ from json_mapping import MappingError
 from providers import catalog_entries
 from design_session import DesignSession
 from tool_sets import FLOW_DESIGN, TOOL_SETS
+from prompt_sets import add_members, lock_set, read_sets, validate_prompt_set, router as prompt_sets_router
 
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin_access)])
+router.include_router(prompt_sets_router)
 
 
 @router.get("/catalog")
@@ -34,8 +36,10 @@ def read_catalog(library):
         rows = connection.execute(select(definitions).where(
             definitions.c.library == library.name).order_by(definitions.c.name, definitions.c.id)).mappings().all()
         models = catalog_entries(connection, library)
+        prompt_sets = read_sets(connection, library)
     prompts = [version for name in library.list_prompts() for version in library.list_versions(name)]
-    return {"agents": [serialize_agent(row) for row in rows], "prompts": prompts, "toolSets": list(TOOL_SETS.values()), **models}
+    return {"agents": [serialize_agent(row) for row in rows], "prompts": prompts,
+            "promptSets": prompt_sets, "toolSets": list(TOOL_SETS.values()), **models}
 
 
 @router.post("/agents", status_code=201)
@@ -44,6 +48,7 @@ def create_agent(body: AgentDefinition, library=Depends(library_for)):
     with library.storage.engine.begin() as connection:
         lock_model_catalog(connection, library)
         validate_selection(connection, library, body.modelSelection)
+        validate_prompt_set(connection, library, body.promptSetId)
         row = connection.execute(definitions.insert().values(**values).returning(definitions)).mappings().one()
     return serialize_agent(row)
 
@@ -58,9 +63,12 @@ def update_agent(agent_id: UUID, body: AgentUpdate, library=Depends(library_for)
         values.pop("model_name")
     if "toolSets" not in body.model_fields_set:
         values.pop("tool_sets")
+    if "promptSetId" not in body.model_fields_set:
+        values.pop("prompt_set_id")
     with library.storage.engine.begin() as connection:
         lock_model_catalog(connection, library)
         validate_selection(connection, library, body.modelSelection)
+        validate_prompt_set(connection, library, body.promptSetId)
         row = connection.execute(definitions.update().where(
             definitions.c.id == agent_id, definitions.c.library == library.name,
             definitions.c.revision == body.revision,
@@ -120,6 +128,11 @@ async def test_agent(agent_id: UUID, body: AgentTestInput, request: Request, res
 @router.post("/prompts", status_code=201)
 def save_prompt(body: PromptWrite, library=Depends(library_for)):
     try:
+        if body.setId is not None:
+            with library.storage.engine.begin() as connection:
+                lock_set(connection, library, body.setId)
+                add_members(connection, body.setId, [body.name])
+                return library.add(body.name, body.text)
         return library.add(body.name, body.text)
     except StorageConflictError:
         raise HTTPException(409, "Another prompt version was published at the same time. Try saving again.")

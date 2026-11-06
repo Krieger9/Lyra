@@ -15,6 +15,7 @@ from flow_switch import FlowFields
 from flow_execution import respond
 from json_mapping import MappingError, ObjectDefinition, assemble, check_size
 from run_store import Run
+from prompt_sets import validate_prompt_set
 
 router = APIRouter(prefix="/api/admin/flows", dependencies=[Depends(require_admin_access)])
 
@@ -74,6 +75,7 @@ def create_flow(body: FlowWrite, library=Depends(library_for)):
     To run a single agent, set its data.definition.id to a saved agent UUID and add two edges
     with id, source and target linking api-input to the agent and the agent to api-response."""
     with library.storage.engine.begin() as connection:
+        validate_prompt_set(connection, library, body.graph.promptSetId)
         row = connection.execute(flows.insert().values(
             id=uuid4(), name=body.name, library=library.name, revision=1,
             graph=body.graph.model_dump(mode="json"), updated_at=datetime.now(timezone.utc),
@@ -84,6 +86,7 @@ def create_flow(body: FlowWrite, library=Depends(library_for)):
 @router.put("/{flow_id}")
 def update_flow(flow_id: UUID, body: FlowUpdate, library=Depends(library_for)):
     with library.storage.engine.begin() as connection:
+        validate_prompt_set(connection, library, body.graph.promptSetId)
         row = connection.execute(flows.update().where(
             flows.c.id == flow_id, flows.c.library == library.name, flows.c.revision == body.revision,
         ).values(name=body.name, revision=body.revision + 1, graph=body.graph.model_dump(mode="json"),

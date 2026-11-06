@@ -18,7 +18,7 @@ export type Agent = Node<{ label: string; definition: AgentDefinition | null; in
 export type FlowItem = GenericItem | JsonItem | ApiInput | ApiResponse | Personality | Designer | Agent | SwitchItem | StateItem | Recall | Remember;
 export type PanelSize = { width: number; height: number };
 type SavedNode = Exclude<FlowItem, Agent> | Node<Omit<Agent["data"], "definition"> & { definition: { id: string } | null }, "agent">;
-export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize; stateObject?: Record<string, unknown>; personalityMode?: "wired" | "legacy"; memoryMode?: "wired" | "legacy" };
+export type SavedGraph = { nodes: SavedNode[]; edges: Wire[]; viewport: Viewport; panelSize: PanelSize; promptSetId?: string | null; stateObject?: Record<string, unknown>; personalityMode?: "wired" | "legacy"; memoryMode?: "wired" | "legacy" };
 
 export type Wire = Edge & { name?: string | null; readAs?: "value" | "json" };
 
@@ -46,10 +46,11 @@ export function nameExistingWires(wires: Wire[]): Wire[] {
 export const otherwise = { id: "otherwise", label: "Otherwise" };
 export const ports = (data: SwitchItem["data"]) => [...(data.switchDefinition?.paths ?? []), otherwise];
 
-export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewport, panelSize: PanelSize, stateObject = {}) {
+export function graphDocument(items: FlowItem[], edges: Wire[], viewport: Viewport, panelSize: PanelSize, stateObject = {}, promptSetId: string | null = null) {
   return {
     personalityMode: "wired" as const,
     memoryMode: "wired" as const,
+    ...(promptSetId ? {promptSetId} : {}),
     ...(Object.keys(stateObject).length ? {stateObject} : {}),
     nodes: items.map(node => ({
       id: node.id, type: node.type, position: node.position,

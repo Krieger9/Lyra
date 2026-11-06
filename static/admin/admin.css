@@ -17,6 +17,15 @@ dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .configuration-heading, .configuration-actions { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .configuration-list { padding-left: 20px; }
 .configuration-list li { padding: 10px 0; overflow-wrap: anywhere; }
+.prompt-set-controls { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.prompt-set-controls select, .prompt-set-controls input:not([type="checkbox"]) { max-width: 100%; padding: 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.prompt-set-controls button { padding: 8px 12px; margin: 4px 0; }
+.prompt-set-controls label { display: block; margin: 8px 0; }
+.prompt-set-controls input[type="checkbox"] { display: inline; width: auto; }
+.prompt-set-controls summary { cursor: pointer; }
+.prompt-set-controls p { font-size: 14px; color: #686675; }
+.prompt-set-bulk { margin-top: 16px; }
+.prompt-set-bulk [role="status"] { display: block; margin-top: 8px; font-size: 13px; }
 .configuration-form label { display: block; margin: 18px 0 6px; }
 .configuration-form input, .configuration-form select, .configuration-form textarea { display: block; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
 .configuration-form textarea { resize: vertical; }
@@ -72,3 +81,123 @@ dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 #continuity-page .configuration-form label { display: block; }
 #designer-chat { margin-bottom: 2rem; }
 #designer-chat [role="log"] p { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* PromptStudio is a working surface, with space for the library and its contents. */
+.prompt-workspace .layout main { flex: 1; width: 100%; max-width: none; margin: 0; padding: 24px 32px 32px; }
+.prompt-workspace main > .eyebrow { display: none; }
+.prompt-workspace main > h1 { font-size: 36px; line-height: 1.15; margin: 0; letter-spacing: -1px; }
+.prompt-workspace #admin-navigation { margin-bottom: 18px; }
+.prompt-workspace #status { margin: 8px 0 22px; color: #686675; }
+.prompt-workspace #workspace { padding: 0; overflow: hidden; border-radius: 12px; }
+.prompt-browser { --studio-accent: #443878; --studio-muted: #706b80; }
+.prompt-browser [hidden] { display: none !important; }
+.prompt-browser button, .prompt-browser input, .prompt-browser select { font: inherit; }
+.prompt-browser button, .prompt-browser a, .prompt-browser input, .prompt-browser select { outline-offset: 3px; }
+.prompt-browser :focus-visible { outline: 2px solid var(--studio-accent); }
+.studio-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 26px; border-bottom: 1px solid var(--line); }
+.studio-heading h2 { margin: 0; font: 600 21px/1.35 system-ui, sans-serif; letter-spacing: -.4px; }
+.studio-heading p { color: var(--studio-muted); font-size: 13px; margin: 5px 0 0; }
+.studio-primary { display: inline-flex; justify-content: center; align-items: center; gap: 8px; border: 1px solid #443878; border-radius: 7px; background: #443878; color: #fff; padding: 10px 15px; text-decoration: none; font-size: 14px; font-weight: 500; white-space: nowrap; }
+.studio-primary:hover { background: #352b61; color: #fff; }
+.prompt-browser button.studio-primary:hover:enabled { background: #352b61; }
+.studio-grid { display: grid; grid-template-columns: 210px minmax(300px, 1fr) minmax(340px, 1.15fr); min-height: max(560px, calc(100dvh - 325px)); }
+.studio-sets { padding: 20px 14px; background: #faf9fc; border-right: 1px solid var(--line); min-width: 0; }
+.studio-section-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; margin-bottom: 14px; }
+.studio-section-heading h3, .studio-kicker { margin: 0; font: 600 11px/1.4 system-ui, sans-serif; text-transform: uppercase; letter-spacing: 1.2px; color: var(--studio-muted); }
+.studio-section-heading button { font-size: 20px; padding: 0; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 6px; }
+#studio-set-list { display: grid; align-content: start; gap: 5px; }
+.studio-set { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border: 0; background: transparent; border-radius: 7px; color: #554d68; text-align: left; }
+.studio-set > span:first-child { overflow-wrap: anywhere; min-width: 0; }
+.studio-set:hover { background: #f0edf6; }
+.studio-set[aria-pressed="true"] { background: #eae5f5; color: #3d306e; font-weight: 600; }
+.studio-count { font-size: 11px; border-radius: 5px; background: #ffffffa6; min-width: 23px; padding: 2px 6px; text-align: center; }
+.studio-set:nth-child(3) { margin-top: 14px; }
+.studio-set-hint { font-size: 12px; line-height: 1.7; color: var(--studio-muted); padding: 20px 10px 0; margin: 20px 0 0; border-top: 1px solid var(--line); }
+#studio-set-form { padding: 0 8px 16px; }
+#studio-set-form label { display: block; font-size: 12px; margin: 0 0 6px; }
+#studio-set-form input { width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; min-width: 0; }
+#studio-set-form button { width: 100%; padding: 8px; font-size: 12px; }
+.studio-library { min-width: 0; border-right: 1px solid var(--line); }
+.studio-search { padding: 20px 20px 14px; }
+.studio-search input { width: 100%; padding: 11px 13px; border: 1px solid #dedbe6; border-radius: 7px; background: #fcfbfd; min-width: 0; }
+.studio-list-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 0 22px 14px; font-size: 12px; color: var(--studio-muted); border-bottom: 1px solid var(--line); }
+.studio-list-heading label { display: flex; align-items: center; gap: 8px; }
+.studio-prompt-list { padding: 0; margin: 0; list-style: none; max-height: calc(100dvh - 435px); min-height: 300px; overflow-y: auto; }
+.studio-prompt-row { display: flex; align-items: flex-start; gap: 10px; padding-left: 22px; border-bottom: 1px solid #eeecf2; }
+.studio-prompt-row > input { margin: 22px 0 0; flex: 0 0 auto; }
+.prompt-browser input[type="checkbox"] { accent-color: var(--studio-accent); width: 14px; height: 14px; cursor: pointer; }
+.studio-prompt-open { display: block; width: 100%; min-width: 0; padding: 18px 18px 18px 10px; border: 0; border-radius: 0; text-align: left; background: transparent; color: var(--ink); }
+.studio-prompt-open:hover { background: #f8f6fc; }
+.studio-prompt-open[aria-pressed="true"] { background: #f2eff9; box-shadow: inset -3px 0 #6c58a0; }
+.studio-row-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.studio-row-name { font-size: 14px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.studio-version-badge { font-size: 11px; color: var(--studio-muted); background: #eeebf3; border: 1px solid #e3deee; border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+.studio-excerpt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; color: var(--studio-muted); margin-top: 6px; }
+.studio-bulk { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: #f4f0fc; padding: 12px 20px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.studio-bulk select, .studio-bulk button { border: 1px solid #dcd6e9; border-radius: 5px; padding: 6px 8px; background: #fff; min-width: 0; max-width: 100%; }
+.studio-bulk > span { width: 100%; color: #534578; font-weight: 600; }
+.studio-detail { min-width: 0; padding: 24px 26px; background: #fdfcfe; }
+.studio-detail-heading { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; }
+.studio-detail-heading a { color: var(--studio-accent); font-size: 13px; font-weight: 500; text-decoration: none; }
+.studio-detail-heading a:hover { text-decoration: underline; }
+#studio-prompt-name { margin: 22px 0 16px; font-size: 24px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
+.studio-version-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--studio-muted); }
+.studio-version-bar select { border: 1px solid #dedbe6; background: #fff; padding: 6px 8px; border-radius: 6px; color: var(--ink); }
+#studio-length { margin-left: auto; }
+.studio-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 0; }
+.studio-tags:empty { display: none; }
+.studio-tag { color: #5d507a; background: #eee9f7; border-radius: 5px; padding: 4px 8px; font-size: 11px; overflow-wrap: anywhere; }
+#studio-template { padding: 20px; border: 1px solid #e8e4ee; border-radius: 8px; background: #fff; white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; font: 13px/1.85 Consolas, monospace; color: #393446; max-height: calc(100dvh - 560px); min-height: 240px; margin: 20px 0 0; tab-size: 2; }
+.studio-empty, .studio-preview-empty { text-align: center; padding: 60px 26px; color: var(--studio-muted); }
+.studio-empty > span, .studio-preview-empty > span { display: block; color: #b5a9cc; font-size: 36px; margin-bottom: 20px; }
+.studio-empty h3, .studio-preview-empty h3 { font-size: 18px; color: #514763; font-weight: 500; }
+.studio-empty p, .studio-preview-empty p { font-size: 13px; line-height: 1.8; max-width: 280px; margin: 12px auto 24px; }
+.studio-empty .studio-primary { font-size: 12px; }
+.studio-status { margin: 0; padding: 12px 24px; color: #5d507a; font-size: 13px; border-top: 1px solid var(--line); }
+.studio-status:empty { display: none; }
+.prompt-workspace #prompts-page:not(.prompt-browser) { padding: 24px 28px; }
+.prompt-workspace .configuration-heading h2 { display: none; }
+.prompt-workspace #prompts-page .configuration-form > h3 { margin: 0 0 22px; font-size: 22px; font-weight: 500; }
+.prompt-workspace #prompt-text { min-height: 52dvh; font: 14px/1.8 Consolas, monospace; padding: 20px; background: #fdfcfe; }
+.prompt-workspace #definition-name, .prompt-workspace #prompt-save-set { max-width: 640px; }
+.prompt-workspace .configuration-actions { position: sticky; bottom: 0; background: white; padding: 16px 0 0; border-top: 1px solid var(--line); }
+.prompt-workspace .configuration-actions button { background: #443878; color: #fff; border-color: #443878; }
+.prompt-editor-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; position: sticky; top: 0; background: #fff; z-index: 1; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
+.prompt-editor-heading h3 { margin: 0; font-size: 22px; font-weight: 500; }
+.prompt-workspace .prompt-editor-heading .configuration-actions { position: static; margin: 0; padding: 0; border: 0; }
+.prompt-editor-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.prompt-editor-meta > div { min-width: 0; }
+.prompt-workspace .prompt-editor-meta :is(#definition-name, #prompt-save-set) { max-width: none; }
+@media (max-width: 1250px) {
+  .prompt-workspace .layout main { padding: 24px; }
+  .studio-grid { grid-template-columns: 175px minmax(260px, 1fr) minmax(280px, 1fr); }
+  .studio-detail { padding: 20px; }
+  .studio-search { padding-inline: 14px; }
+  .studio-prompt-row { padding-left: 14px; }
+}
+@media (max-width: 1050px) {
+  .studio-grid { grid-template-columns: 180px minmax(0, 1fr); }
+  .studio-sets { grid-row: span 2; }
+  .studio-library { border-right: 0; }
+  .studio-detail { grid-column: 2; border-top: 1px solid var(--line); }
+  .studio-prompt-list { max-height: 420px; min-height: 0; }
+  #studio-template { max-height: 460px; }
+}
+@media (max-width: 650px) {
+  .prompt-workspace .layout main { padding: 18px 12px; }
+  .prompt-workspace main > h1 { font-size: 28px; }
+  .studio-heading { padding: 18px 14px; flex-wrap: wrap; }
+  .studio-heading p { line-height: 1.6; }
+  .studio-grid { display: block; }
+  .studio-sets { padding: 14px; border-right: 0; border-bottom: 1px solid var(--line); }
+  #studio-set-list { display: flex; overflow-x: auto; padding-bottom: 4px; }
+  .studio-set { width: auto; flex: 0 0 auto; max-width: 220px; }
+  .studio-set:nth-child(3) { margin-top: 0; }
+  .studio-set-hint { display: none; }
+  .studio-detail { padding: 20px 14px; }
+  .studio-prompt-list { max-height: 360px; }
+  #studio-prompt-name { font-size: 20px; }
+  #studio-template { padding: 14px; }
+  .prompt-workspace #prompts-page:not(.prompt-browser) { padding: 20px 16px; }
+  .prompt-editor-meta { grid-template-columns: 1fr; gap: 0; }
+}

@@ -102,10 +102,20 @@ def _agent_tool_sets(connection):
                                "tool_sets JSONB NOT NULL DEFAULT '[]'::jsonb")
 
 
+def _prompt_sets(connection):
+    from prompt_sets import metadata
+    metadata.create_all(connection)
+
+
+def _agent_prompt_set(connection):
+    connection.exec_driver_sql("ALTER TABLE agent_definitions ADD COLUMN IF NOT EXISTS "
+                               "prompt_set_id UUID REFERENCES prompt_sets(id)")
+
+
 # Append revisions here. The recorded sequence is part of the database format.
 MIGRATIONS = ((1, _baseline), (2, _agent_inputs_and_outputs), (3, _provider_catalog),
               (4, _conversation_state), (5, _memories), (6, _memory_turns), (7, _personalities),
-              (8, _identity_continuity), (9, _agent_tool_sets))
+              (8, _identity_continuity), (9, _agent_tool_sets), (10, _prompt_sets), (11, _agent_prompt_set))
 
 
 def apply_migrations(connection):

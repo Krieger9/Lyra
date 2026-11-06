@@ -123,6 +123,7 @@ def path_requirements(node, parents, requirements):
 
 
 class FlowGraph(BaseModel):
+    promptSetId: UUID | None = Field(default=None, description="Default prompt set for agents without an override.")
     memoryMode: Literal["wired", "legacy"] = "wired"
     personalityMode: Literal["wired", "legacy"] = "wired"
     stateObject: dict[str, JsonValue] = Field(default_factory=dict, max_length=64)
