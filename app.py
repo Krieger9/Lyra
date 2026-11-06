@@ -19,6 +19,7 @@ from pydantic import BaseModel, JsonValue
 
 from auth import require_admin_access, require_chat_access, settings
 from agent_definitions import router as definitions_router
+from admin_overview import router as overview_router
 from providers import router as providers_router
 from agent_store import seed_defaults, seed_designer
 from schema_migrations import apply_migrations, schema_transaction
@@ -104,6 +105,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Lyra Chat", lifespan=lifespan)
 app.include_router(definitions_router)
+app.include_router(overview_router)
 app.include_router(providers_router)
 app.include_router(flows_router)
 app.include_router(run_router)

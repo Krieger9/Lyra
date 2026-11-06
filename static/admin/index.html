@@ -67,9 +67,22 @@
     <p id="status" role="status">Checking access…</p>
     <div id="workspace" hidden>
     <section id="home-page" aria-labelledby="overview">
-      <h2 id="overview">Current configuration</h2>
+      <div class="configuration-heading"><h2 id="overview">Chat configuration</h2><button type="button" id="overview-refresh">Refresh</button></div>
+      <p id="overview-status" role="status"></p>
+      <div id="overview-data" hidden>
+        <p id="overview-active"></p>
+        <div id="overview-models"></div>
+        <h3>Workspace</h3>
+        <dl class="overview-counts">
+          <div><dt>Flows</dt><dd data-count="flows"></dd></div>
+          <div><dt>Agents</dt><dd data-count="agents"></dd></div>
+          <div><dt>Prompts</dt><dd data-count="prompts"></dd></div>
+          <div><dt>Prompt sets</dt><dd data-count="sets"></dd></div>
+        </dl>
+        <h3>Recently edited flows</h3><ul id="overview-recent"></ul>
+        <p id="overview-empty" hidden>No flows saved yet.</p>
+      </div>
       <dl>
-        <dt>Chat model</dt><dd data-model></dd>
         <dt>Prompt library</dt><dd data-library></dd>
       </dl>
     </section>

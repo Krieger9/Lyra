@@ -16,6 +16,15 @@ dt { font-size: 13px; color: #686675; margin-top: 18px; }
 dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .configuration-heading, .configuration-actions { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .configuration-list { padding-left: 20px; }
+#overview-refresh { padding: 7px 12px; }
+#overview-status { font-size: 13px; color: #625e70; }
+#overview-active, #overview-models { overflow-wrap: anywhere; }
+.overview-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 12px; margin: 20px 0 24px; }
+.overview-counts > div { padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; }
+.overview-counts dt { margin: 0; }
+.overview-counts dd { font-size: 24px; }
+#overview-recent { padding-left: 20px; }
+#overview-recent li { padding-block: 4px; overflow-wrap: anywhere; }
 .configuration-list li { padding: 10px 0; overflow-wrap: anywhere; }
 .prompt-set-controls { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
 .prompt-set-controls select, .prompt-set-controls input:not([type="checkbox"]) { max-width: 100%; padding: 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }

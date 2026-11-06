@@ -546,6 +546,34 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(other.status_code, 200, other.text)
             self.assertNotIn("User prefers tea", model.await_args_list[-3].args[0])
 
+    async def test_overview_distinguishes_activated_revision_from_latest_edits(self):
+        app.state.studio.model = SimpleNamespace(model=SimpleNamespace(id="server-default"))
+        endpoint = "/api/admin/overview"
+        empty = await self.client.get(endpoint)
+        self.assertEqual(empty.headers["cache-control"], "no-store")
+        self.assertIsNone(empty.json()["activeFlow"])
+        self.assertEqual(empty.json()["defaultModel"], "server-default")
+        self.library.add("request", "Updated {{ request }}")
+        PromptLibrary(self.storage, "other").add("private", "Other library")
+        agent = (await self.client.post("/api/admin/agents", json=self.body)).json()
+        graph = self.flow_graph()
+        graph["nodes"].append({"id": "worker", "type": "agent", "position": {"x": 1, "y": 1},
+                               "data": {"definition": {"id": agent["id"]}, "label": "Review"}})
+        graph["edges"] = [{"id": "input", "source": "api-input", "target": "worker"},
+                          {"id": "reply", "source": "worker", "target": "api-response"}]
+        flow = (await self.client.post("/api/admin/flows", json={"name": "Live", "graph": graph})).json()
+        activation = await self.client.put("/api/admin/chat-flow/" + flow["id"], json={"revision": 1})
+        self.assertEqual(activation.status_code, 200, activation.text)
+        edit = await self.client.put("/api/admin/flows/" + flow["id"], json={
+            "name": "Edited", "graph": graph, "revision": 1})
+        self.assertEqual(edit.status_code, 200, edit.text)
+        overview = (await self.client.get(endpoint)).json()
+        self.assertEqual(overview["counts"], {"flows": 1, "agents": 1, "prompts": 3, "sets": 0})
+        self.assertEqual(overview["recentFlows"], [{"id": flow["id"], "name": "Edited", "revision": 2}])
+        self.assertEqual(overview["activeFlow"], {"id": flow["id"], "name": "Live", "revision": 1,
+            "assignments": [{"step": "Review", "agent": "Planner", "model": "server-default",
+                             "provider": None, "usesDefault": True}]})
+
     async def test_provider_model_selection_for_agent_test_flow_and_pinned_chat(self):
         mids = [(await self.client.post("/api/admin/models", json={"name": name})).json()["id"]
                 for name in ("small", "large:v2")]
@@ -603,6 +631,12 @@ class AgentDefinitionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(chat.json()["reply"], "http://lab.test:11434 large:v2")
         reset = await self.client.put(agent_url, json=self.body | {"revision": 2, "modelSelection": None})
         self.assertIsNone(reset.json()["modelSelection"])
+        app.state.studio.model = SimpleNamespace(model=SimpleNamespace(id="server-default"))
+        overview = (await self.client.get("/api/admin/overview")).json()
+        assignment, = overview["activeFlow"]["assignments"]
+        self.assertEqual(assignment["model"], "large:v2")
+        self.assertEqual(assignment["provider"], "Lab Ollama")
+        self.assertFalse(assignment["usesDefault"])
 
     async def test_catalog_model_identity_protocol_and_membership(self):
         base = "/api/admin/"

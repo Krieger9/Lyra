@@ -66,7 +66,6 @@ async function loadHome() {
   window.lyraAssetVersion = home.ui_version;
   window.lyraPromptSetScope = account.homeAccountId + "." + home.prompt_library;
   const assetUrl = path => path + "?v=" + encodeURIComponent(home.ui_version);
-  for (const field of document.querySelectorAll("[data-model]")) field.textContent = home.chat_model;
   for (const field of document.querySelectorAll("[data-library]")) field.textContent = home.prompt_library;
   sidebar.hidden = false;
   document.querySelector("#workspace").hidden = false;
@@ -88,6 +87,10 @@ async function loadHome() {
     }
     return result.json();
   };
+  if (page === "home") {
+    const { mountOverview } = await import(assetUrl("/admin/overview.js"));
+    await mountOverview(document.querySelector("#home-page"));
+  }
   if (page === "agents" || page === "prompts") {
     const { mountConfiguration } = await import(assetUrl("/admin/configuration.js"));
     await mountConfiguration(page);

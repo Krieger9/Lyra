@@ -59,6 +59,7 @@ class ChatAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         config = (await self.browser.get("/auth/config?site=admin")).json()
         self.assertEqual(config["scope"], self.resource + "/access-as-admin")
         self.assertEqual((await self.browser.get("/api/admin/home")).status_code, 401)
+        self.assertEqual((await self.browser.get("/api/admin/overview")).status_code, 401)
         for scope, role in [("access-as-user", "User.Admin"), ("access-as-admin", "User.Chat")]:
             response = await self.browser.get("/api/admin/home", headers=self.headers(scp=scope, roles=[role]))
             self.assertEqual(response.status_code, 403)
